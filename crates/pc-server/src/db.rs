@@ -13,7 +13,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{GenericClient, NoTls, Row};
 use tracing::{info, warn};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -174,6 +174,86 @@ CREATE TABLE IF NOT EXISTS finding_states (
     note        TEXT,
     updated_at  TIMESTAMPTZ NOT NULL,
     resolved_at TIMESTAMPTZ
+);
+
+-- Änderungsverlauf zwischen zwei Scans eines Systems
+CREATE TABLE IF NOT EXISTS changes (
+    id          BIGSERIAL PRIMARY KEY,
+    system_id   BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    scan_id     BIGINT NOT NULL,
+    detected_at TIMESTAMPTZ NOT NULL,
+    object_kind TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    change      TEXT NOT NULL,
+    sid         TEXT,
+    old_value   TEXT,
+    new_value   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_changes_system ON changes(system_id, detected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_changes_sid ON changes(sid);
+
+-- Tageswerte der Bewertung (Trend); system_id 0 = gesamt bzw. AD
+CREATE TABLE IF NOT EXISTS score_history (
+    day       DATE NOT NULL,
+    scope     TEXT NOT NULL,
+    system_id BIGINT NOT NULL DEFAULT 0,
+    score     INTEGER NOT NULL,
+    grade     TEXT NOT NULL,
+    critical  INTEGER NOT NULL,
+    high      INTEGER NOT NULL,
+    medium    INTEGER NOT NULL,
+    low       INTEGER NOT NULL,
+    info      INTEGER NOT NULL,
+    PRIMARY KEY (day, scope, system_id)
+);
+
+-- Fachlich verantwortliche Person je Ordner (gilt auch für Unterordner)
+CREATE TABLE IF NOT EXISTS data_owners (
+    system_id  BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    path       TEXT NOT NULL,
+    owner      TEXT NOT NULL,
+    email      TEXT,
+    note       TEXT,
+    updated_at TIMESTAMPTZ NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_data_owners ON data_owners (system_id, lower(path));
+
+-- Mitglieder der lokalen Administratorengruppe je System (neuester Scan)
+CREATE TABLE IF NOT EXISTS local_admins (
+    system_id BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    sid       TEXT NOT NULL,
+    name      TEXT,
+    kind      TEXT NOT NULL,
+    PRIMARY KEY (system_id, sid)
+);
+
+-- Dateien mit eigenen Berechtigungen (optionale Dateiebene, neuester Scan)
+CREATE TABLE IF NOT EXISTS files (
+    system_id       BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    file_id         BIGINT NOT NULL,
+    folder_local_id BIGINT NOT NULL,
+    path            TEXT NOT NULL,
+    owner_sid       TEXT,
+    protected       BOOLEAN NOT NULL,
+    PRIMARY KEY (system_id, file_id)
+);
+CREATE INDEX IF NOT EXISTS idx_files_folder ON files(system_id, folder_local_id);
+CREATE TABLE IF NOT EXISTS file_aces (
+    system_id BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    file_id   BIGINT NOT NULL,
+    sid       TEXT NOT NULL,
+    ace_type  TEXT NOT NULL,
+    mask      BIGINT NOT NULL,
+    rights    TEXT NOT NULL,
+    inherited BOOLEAN NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_file_aces ON file_aces(system_id, file_id);
+
+-- „Jetzt scannen“: vom Client-Dienst abgeholte Aufträge
+CREATE TABLE IF NOT EXISTS scan_requests (
+    system_id    BIGINT PRIMARY KEY REFERENCES systems(id) ON DELETE CASCADE,
+    requested_at TIMESTAMPTZ NOT NULL,
+    picked_at    TIMESTAMPTZ
 );
 "#;
 

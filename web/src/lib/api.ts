@@ -313,6 +313,20 @@ export interface Settings {
   auth_mode: string
   ldap: { configured: boolean; url: string | null; base_dn: string | null; bind_dn: string | null; sync_interval_minutes: number }
   analysis: { inactive_days: number; stale_scan_days: number; deep_explicit_depth: number; max_findings_per_rule: number }
+  notify: {
+    public_url: string | null
+    min_severity: string
+    grade_drop: boolean
+    weekly_summary: string | null
+    smtp: { host: string; port: number; security: string; from: string; to: string[] } | null
+    webhooks: { format: string; host: string | null }[]
+  }
+}
+
+export interface Delivery {
+  channel: string
+  ok: boolean
+  error: string | null
 }
 
 export class ApiError extends Error {
@@ -429,4 +443,81 @@ export interface AssistDetail {
   finding: AssistItem
   rule: { id: string; title: string; description: string; recommendation: string; severity: Severity; scope: string } | null
   guide: AssistGuide
+}
+
+export interface ChangeItem {
+  id: number
+  system_id: number
+  hostname: string
+  detected_at: string
+  object_kind: 'folder' | 'share'
+  path: string
+  change: string
+  change_label: string
+  sid: string | null
+  principal?: Principal
+  old_value: string | null
+  new_value: string | null
+}
+
+export interface ChangesResponse {
+  total: number
+  items: ChangeItem[]
+  per_day: { day: string; changes: number }[]
+  labels: Record<string, string>
+}
+
+export interface HistoryRow {
+  day: string
+  scope: 'total' | 'infra' | 'ad' | 'system'
+  system_id: number
+  score: number
+  grade: string
+  critical: number
+  high: number
+  medium: number
+  low: number
+  info: number
+}
+
+export interface DataOwner {
+  system_id: number
+  hostname?: string
+  path: string
+  owner: string
+  email: string | null
+  note?: string | null
+  updated_at?: string
+  findings?: number
+  inherited?: boolean
+}
+
+export interface AccessGrant {
+  principal: Principal
+  ace_type: string
+  rights_label: string
+  inherited?: boolean
+}
+
+export interface AccessResult {
+  system_id: number
+  hostname: string
+  path: string
+  via_share: string | null
+  folder: { local_id: number; path: string; exact: boolean; protected: boolean; acl_source_path: string | null }
+  owner: { path: string; owner: string; email: string | null } | null
+  aces: AccessGrant[]
+  everyone: AccessGrant[]
+  unresolved: AccessGrant[]
+  users: {
+    principal: Principal
+    rights_label: string
+    can_write: boolean
+    denied: boolean
+    deny_label: string | null
+    direct: boolean
+    via: string[]
+  }[]
+  users_total: number
+  shares: { name: string; unc: string; no_security: boolean; permissions: AccessGrant[] }[]
 }

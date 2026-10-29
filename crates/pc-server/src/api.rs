@@ -30,13 +30,13 @@ pub struct AppState {
     pub ad_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
-pub struct ApiError(StatusCode, String);
+pub struct ApiError(pub StatusCode, pub String);
 
 impl ApiError {
-    fn not_found(what: &str) -> Self {
+    pub fn not_found(what: &str) -> Self {
         Self(StatusCode::NOT_FOUND, format!("{what} nicht gefunden"))
     }
-    fn bad_request(msg: impl Into<String>) -> Self {
+    pub fn bad_request(msg: impl Into<String>) -> Self {
         Self(StatusCode::BAD_REQUEST, msg.into())
     }
 }
@@ -74,7 +74,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-type ApiResult<T = Value> = Result<Json<T>, ApiError>;
+pub type ApiResult<T = Value> = Result<Json<T>, ApiError>;
 
 /// Befunde ohne akzeptierte Ausnahme (Audit-Assist); nur diese zählen in Bewertung und Statistik.
 const NOT_ACCEPTED: &str = "NOT EXISTS (SELECT 1 FROM finding_states fs WHERE fs.fingerprint = findings.fingerprint AND fs.status = 'accepted')";
@@ -177,6 +177,23 @@ async fn settings(State(st): State<AppState>) -> ApiResult {
             "sync_interval_minutes": c.ldap.sync_interval_minutes,
         },
         "analysis": c.analysis,
+        "notify": {
+            "public_url": c.notify.public_url,
+            "min_severity": c.notify.min_severity,
+            "grade_drop": c.notify.grade_drop,
+            "weekly_summary": c.notify.weekly_summary,
+            "smtp": c.notify.smtp_configured().then(|| json!({
+                "host": c.notify.smtp.host,
+                "port": c.notify.smtp.port,
+                "security": c.notify.smtp.security,
+                "from": c.notify.smtp.from,
+                "to": c.notify.smtp.to,
+            })),
+            "webhooks": c.notify.webhooks.iter().map(|w| json!({
+                "format": w.format,
+                "host": w.url.split('/').nth(2),
+            })).collect::<Vec<_>>(),
+        },
     })))
 }
 
@@ -194,9 +211,11 @@ async fn upload_report(
     let mut client = st.db.get().await?;
     let tx = client.transaction().await?;
     let res = ingest::ingest(&tx, &report).await?;
-    if !res.duplicate {
-        analysis::run(&tx, &st.cfg.analysis).await?;
-    }
+    let summary = if res.duplicate {
+        None
+    } else {
+        Some(analysis::run(&tx, &st.cfg.analysis).await?)
+    };
     let findings = count(
         &*tx,
         "SELECT COUNT(*) FROM findings WHERE system_id = $1",
@@ -205,15 +224,19 @@ async fn upload_report(
     .await?;
     tx.commit().await?;
     info!(
-        "Report von {} empfangen (Scan {}{}), {findings} Befunde",
+        "Report von {} empfangen (Scan {}{}), {findings} Befunde, {} Änderungen",
         report.host.hostname,
         report.scan_id,
         if res.duplicate {
             ", bereits bekannt"
         } else {
             ""
-        }
+        },
+        res.changes
     );
+    if let Some(s) = summary {
+        crate::notify::after_analysis(st.clone(), s);
+    }
     Ok(Json(UploadResponse {
         accepted: true,
         system_id: res.system_id,
@@ -226,7 +249,7 @@ async fn upload_report(
 }
 
 /// Prüft den Client-Token (Header `X-Api-Key`), sofern Tokens konfiguriert sind.
-fn check_token(st: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
+pub fn check_token(st: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
     if st.cfg.api_tokens.is_empty() {
         return Ok(());
     }
@@ -741,18 +764,18 @@ async fn system_shares(State(st): State<AppState>, Path(id): Path<i64>) -> ApiRe
 // Befunde, Empfehlungen, Audit
 
 #[derive(Deserialize)]
-struct FindingQuery {
-    system_id: Option<i64>,
-    severity: Option<String>,
-    rule: Option<String>,
-    sid: Option<String>,
-    scope: Option<String>,
-    q: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+pub struct FindingQuery {
+    pub system_id: Option<i64>,
+    pub severity: Option<String>,
+    pub rule: Option<String>,
+    pub sid: Option<String>,
+    pub scope: Option<String>,
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
-async fn findings(State(st): State<AppState>, Query(q): Query<FindingQuery>) -> ApiResult {
+pub async fn findings(State(st): State<AppState>, Query(q): Query<FindingQuery>) -> ApiResult {
     let c = st.db.get().await?;
     let c = &**c;
     let like =
@@ -865,7 +888,7 @@ async fn recommendations(State(st): State<AppState>) -> ApiResult {
     Ok(Json(json!(list)))
 }
 
-async fn audit(State(st): State<AppState>) -> ApiResult {
+pub async fn audit(State(st): State<AppState>) -> ApiResult {
     let c = st.db.get().await?;
     let c = &**c;
     let systems = system_summaries(c, None).await?;
@@ -924,8 +947,10 @@ async fn audit(State(st): State<AppState>) -> ApiResult {
 async fn analyze(State(st): State<AppState>) -> ApiResult {
     let mut client = st.db.get().await?;
     let tx = client.transaction().await?;
-    let n = analysis::run(&tx, &st.cfg.analysis).await?.findings;
+    let a = analysis::run(&tx, &st.cfg.analysis).await?;
     tx.commit().await?;
+    let n = a.findings;
+    crate::notify::after_analysis(st.clone(), a);
     Ok(Json(json!({ "findings": n })))
 }
 
@@ -1265,7 +1290,7 @@ async fn access_for(
     Ok(out)
 }
 
-async fn principal_detail(State(st): State<AppState>, Path(sid): Path<String>) -> ApiResult {
+pub async fn principal_detail(State(st): State<AppState>, Path(sid): Path<String>) -> ApiResult {
     let c = st.db.get().await?;
     let c = &**c;
     let dir = Directory::load(c, st.cfg.analysis.inactive_days).await?;
@@ -1481,6 +1506,7 @@ pub async fn store_and_analyze(
     let a = analysis::run(&tx, &st.cfg.analysis).await?;
     tx.commit().await?;
     let v = json!({ "users": u, "groups": g, "findings": a.findings, "source": source });
+    crate::notify::after_analysis(st.clone(), a);
     info!("AD-Daten übernommen: {v}");
     Ok(v)
 }

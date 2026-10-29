@@ -1,12 +1,15 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { Link } from 'react-router-dom'
-import { Lock, PackageCheck, ShieldCheck, ShieldOff } from 'lucide-react'
+import { Bell, Lock, PackageCheck, Send, ShieldCheck, ShieldOff } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ErrorState, Loading, PageHeader } from '@/components/common'
+import { ErrorState, Loading, PageHeader, Spinner } from '@/components/common'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { api, type ClientReleases, type Settings } from '@/lib/api'
+import { api, type ClientReleases, type Delivery, type Settings } from '@/lib/api'
 import { bytes, dateTime, relative } from '@/lib/format'
 
 export default function SettingsPage() {
@@ -66,6 +69,7 @@ export default function SettingsPage() {
           </CardContent>
         </Card>
       </div>
+      <Notifications s={data} />
       <ClientUpdates />
     </>
   )
@@ -152,6 +156,73 @@ function ClientUpdates() {
             </div>
           </div>
         )}
+      </CardContent>
+    </Card>
+  )
+}
+
+const sevLabel: Record<string, string> = {
+  critical: 'ab Kritisch',
+  high: 'ab Hoch',
+  medium: 'ab Mittel',
+  low: 'ab Niedrig',
+  info: 'alle',
+  off: 'aus',
+}
+
+function showDeliveries(list: Delivery[]) {
+  for (const d of list) {
+    if (d.ok) toast.success(`Gesendet: ${d.channel}`)
+    else toast.error(`${d.channel}: ${d.error}`, { duration: 15000 })
+  }
+}
+
+function Notifications({ s }: { s: Settings }) {
+  const n = s.notify
+  const configured = !!n.smtp || n.webhooks.length > 0
+  const test = useMutation({
+    mutationFn: () => api.post<Delivery[]>('/notify/test'),
+    onSuccess: showDeliveries,
+    onError: (e) => toast.error(String(e instanceof Error ? e.message : e)),
+  })
+  const weekly = useMutation({
+    mutationFn: () => api.post<{ deliveries: Delivery[] }>('/notify/weekly'),
+    onSuccess: (r) => showDeliveries(r.deliveries),
+    onError: (e) => toast.error(String(e instanceof Error ? e.message : e)),
+  })
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <Bell className="size-4" /> Benachrichtigungen
+        </CardTitle>
+        <CardDescription>
+          Neue Befunde, Verschlechterung der Note, Systeme ohne aktuellen Scan und Wochenbericht – per E-Mail und
+          Webhook (Teams, Slack). Einrichtung über <code>PC_SMTP_*</code>, <code>PC_WEBHOOK_TEAMS</code>,{' '}
+          <code>PC_WEBHOOK_SLACK</code> bzw. den Abschnitt <code>[notify]</code>.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-x-8 gap-y-2 text-sm md:grid-cols-2">
+        <Row k="Neue Befunde melden" v={sevLabel[n.min_severity] ?? n.min_severity} />
+        <Row k="Verschlechterung der Note" v={n.grade_drop ? 'melden' : 'aus'} />
+        <Row k="Wochenbericht" v={n.weekly_summary || 'aus'} />
+        <Row k="Links auf" v={n.public_url ?? '– (PC_PUBLIC_URL setzen)'} mono />
+        <Row
+          k="E-Mail"
+          v={n.smtp ? `${n.smtp.to.join(', ')} über ${n.smtp.host}:${n.smtp.port} (${n.smtp.security})` : 'nicht eingerichtet'}
+        />
+        <Row
+          k="Webhooks"
+          v={n.webhooks.length ? n.webhooks.map((w) => `${w.format}: ${w.host}`).join(', ') : 'keine'}
+        />
+        <div className="flex flex-wrap gap-2 pt-2 md:col-span-2">
+          <Button size="sm" variant="outline" disabled={!configured || test.isPending} onClick={() => test.mutate()}>
+            {test.isPending ? <Spinner /> : <Send className="size-4" />} Testnachricht senden
+          </Button>
+          <Button size="sm" variant="outline" disabled={!configured || weekly.isPending} onClick={() => weekly.mutate()}>
+            {weekly.isPending ? <Spinner /> : <Send className="size-4" />} Wochenbericht jetzt senden
+          </Button>
+        </div>
       </CardContent>
     </Card>
   )
