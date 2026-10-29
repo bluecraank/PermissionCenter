@@ -49,9 +49,28 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw 'Bitte als Administrator ausführen.'
 }
 
+# Ruft pc-client.exe auf. Der Client protokolliert auf stderr; Windows PowerShell 5.1 würde
+# das bei ErrorActionPreference=Stop als Fehler werten. Maßgeblich ist nur der Exit-Code.
+function Invoke-PcClient {
+    # Bewusst ohne param()-Block: so landen auch Argumente wie "--config" unverändert in $args
+    $PcArgs = $args
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $exe @PcArgs 2>$null
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prev
+    }
+    if ($code -ne 0) {
+        throw "pc-client $($PcArgs -join ' ') fehlgeschlagen (Exit-Code $code). Details: `"$exe`" logs --errors"
+    }
+    $out
+}
+
 function Remove-Existing {
     if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-        & $exe service uninstall | Out-Null
+        Invoke-PcClient service uninstall | Out-Null
         Write-Host "Dienst $serviceName entfernt."
     }
     if (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue) {
@@ -78,7 +97,7 @@ icacls $dataDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI
 icacls $installDir /grant '*S-1-5-18:(OI)(CI)F' | Out-Null
 
 if (-not (Test-Path $config)) {
-    $text = & $exe init-config 2>$null | Out-String
+    $text = Invoke-PcClient init-config | Out-String
     $text = $text -replace '(?m)^# url = .*$', "url = `"$ServerUrl`""
     if ($ApiToken) { $text = $text -replace '(?m)^# api_token = .*$', "api_token = `"$ApiToken`"" }
     if ($PublicKey) { $text = $text -replace '(?m)^# public_key = .*$', "public_key = `"$PublicKey`"" }
@@ -90,8 +109,7 @@ if (-not (Test-Path $config)) {
 }
 
 if ($Mode -eq 'Service') {
-    & $exe --config $config service install
-    if ($LASTEXITCODE -ne 0) { throw 'Dienstinstallation fehlgeschlagen – siehe Log (pc-client logs --errors).' }
+    Invoke-PcClient --config $config service install | Out-Null
     Start-Service $serviceName
     Write-Host "Dienst $serviceName läuft. Scan täglich um $At (änderbar in $config, Abschnitt [service])."
     if ($RunNow) {

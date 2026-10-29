@@ -17,6 +17,8 @@ use tracing_subscriber::{EnvFilter, Layer};
 use crate::config::LoggingConfig;
 
 pub const FILE_PREFIX: &str = "pc-client";
+/// Verwaltungszeilen eines Laufs (Start, Konfiguration, Dauer): nur in der Datei, nicht auf der Konsole.
+pub const RUN_TARGET: &str = "pc_client::run";
 
 /// Hält den Hintergrund-Schreiber am Leben; beim Drop werden gepufferte Zeilen geschrieben.
 pub struct LogGuard {
@@ -50,7 +52,7 @@ pub fn init(cfg: &LoggingConfig, console: bool, verbose: bool) -> LogGuard {
             .with_timer(timer.clone())
             .with_filter(
                 EnvFilter::try_from_env("PC_LOG")
-                    .unwrap_or_else(|_| EnvFilter::new(&console_filter)),
+                    .unwrap_or_else(|_| EnvFilter::new(format!("{console_filter},{RUN_TARGET}=warn"))),
             )
     });
 
@@ -126,6 +128,7 @@ pub fn log_startup(command: &str) {
     let user = std::env::var("USERNAME").unwrap_or_default();
     let domain = std::env::var("USERDOMAIN").unwrap_or_default();
     info!(
+        target: RUN_TARGET,
         "pc-client {} gestartet: Befehl={command}, PID={}, Benutzer={domain}\\{user}, Admin={}, Argumente={:?}",
         env!("CARGO_PKG_VERSION"),
         std::process::id(),
