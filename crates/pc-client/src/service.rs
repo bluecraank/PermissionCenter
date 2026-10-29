@@ -240,11 +240,19 @@ fn service_loop() -> Result<()> {
         scan_at.saturating_duration_since(Instant::now()).as_secs() / 60
     );
 
+    let poll_every = Duration::from_secs(cfg.service.task_poll_minutes * 60);
+    let polling = cfg.server.url.is_some() && cfg.service.task_poll_minutes > 0;
+    let mut next_poll = Instant::now() + Duration::from_secs(30);
+    let hostname = crate::win::system::host_info().hostname;
+
     let mut exit_code = 0;
     loop {
         let mut wake = scan_at;
         if cfg.update.auto_update && cfg.service.update_check_minutes > 0 {
             wake = wake.min(next_update);
+        }
+        if polling {
+            wake = wake.min(next_poll);
         }
         match rx.recv_timeout(wake.saturating_duration_since(Instant::now())) {
             Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -254,7 +262,22 @@ fn service_loop() -> Result<()> {
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         let now = Instant::now();
-        let scan_due = now >= scan_at;
+        let mut scan_due = now >= scan_at;
+        let mut requested = false;
+        if polling && now >= next_poll {
+            next_poll = now + poll_every.max(Duration::from_secs(60));
+            match crate::upload::ServerClient::new(&cfg.server)
+                .and_then(|c| c.pending_scan(&hostname))
+            {
+                Ok(true) => {
+                    info!("Scan in der Weboberfläche angefordert");
+                    scan_due = true;
+                    requested = true;
+                }
+                Ok(false) => {}
+                Err(e) => tracing::debug!("Auftragsabfrage fehlgeschlagen: {e:#}"),
+            }
+        }
         if cfg.update.auto_update && cfg.server.url.is_some() && (scan_due || now >= next_update) {
             next_update = now + update_every.max(Duration::from_secs(300));
             match update::run(&cfg, true) {
@@ -268,11 +291,21 @@ fn service_loop() -> Result<()> {
             }
         }
         if scan_due {
-            info!("Geplanter Scan startet");
+            info!(
+                "{} startet",
+                if requested {
+                    "Angeforderter Scan"
+                } else {
+                    "Geplanter Scan"
+                }
+            );
             if let Err(e) = crate::scan_store_upload(&cfg, &[], None, false) {
-                error!("Geplanter Scan fehlgeschlagen: {e:#}");
+                error!("Scan fehlgeschlagen: {e:#}");
             }
-            scan_at = next_scan(&cfg, Some(Instant::now()));
+            // Ein angeforderter Scan verschiebt den regulären Zeitplan nicht
+            if !requested || Instant::now() >= scan_at {
+                scan_at = next_scan(&cfg, Some(Instant::now()));
+            }
             info!(
                 "Nächster Scan in {} Minuten",
                 scan_at.saturating_duration_since(Instant::now()).as_secs() / 60

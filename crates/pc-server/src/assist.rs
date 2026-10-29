@@ -984,6 +984,319 @@ pub async fn guide(c: &impl GenericClient, f: &FindingRef, cfg: &AnalysisConfig)
             g.script = Some(s.build());
         }
 
+        "AD_PRIVILEGED_STALE" => {
+            let privileged = crate::analysis::privileged_groups(&dir);
+            // Direkte Gruppen, über die das Konto in eine privilegierte Gruppe gelangt
+            let mut direct: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for (g, path) in dir.transitive_groups(sid) {
+                if privileged.contains(&g) {
+                    if let Some(first) = path.first() {
+                        direct
+                            .entry(first.clone())
+                            .or_default()
+                            .push(dir.view(&g).name);
+                    }
+                }
+            }
+            g.steps = steps(&[
+                "Klären, ob das Konto noch gebraucht wird – meist ist es ein ausgeschiedener Admin oder ein altes Dienstkonto.",
+                "Skript ohne -Apply prüfen: es entfernt das Konto aus den Gruppen, über die es administrative Rechte erhält.",
+                "Skript mit -Apply ausführen (die Mitgliedschaften werden vorher gesichert).",
+                "Wird das Konto gar nicht mehr gebraucht: zusätzlich deaktivieren bzw. löschen.",
+            ]);
+            if direct.keys().any(|d| !privileged.contains(d)) {
+                g.warning = Some(
+                    "Das Konto ist über eine Zwischengruppe privilegiert. Beim Entfernen aus dieser Gruppe verliert es auch deren übrige Rechte."
+                        .into(),
+                );
+            }
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.ad = true;
+            for (d, via) in &direct {
+                let dn = dir.view(d).name;
+                s.step(
+                    &format!("{name} aus {dn} entfernen"),
+                    &format!(
+                        "Backup-AdGroup {d}; Remove-ADGroupMember -Identity {d} -Members {u} -Confirm:$false",
+                        d = q(d),
+                        u = q(sid)
+                    ),
+                );
+                g.objects.push(Obj {
+                    label: dn,
+                    info: format!("führt zu: {}", via.join(", ")),
+                });
+            }
+            g.objects_total = g.objects.len();
+            g.script = Some(s.build());
+        }
+
+        "AD_PRIVILEGED_MANY" => {
+            let members: Vec<String> = dir
+                .transitive_user_members(sid)
+                .into_iter()
+                .filter(|u| dir.users.get(u).is_some_and(|x| !x.is_computer))
+                .collect();
+            g.steps = steps(&[
+                "Mitgliederliste mit den Verantwortlichen durchgehen: Wer braucht diese Rechte wirklich dauerhaft?",
+                "Für Admin-Aufgaben persönliche, getrennte Admin-Konten verwenden – nicht das Alltagskonto.",
+                "Aufgaben wie Kennwort zurücksetzen oder Computer aufnehmen über delegierte Rechte lösen, nicht über Domänen-Admins.",
+                "Nicht mehr benötigte Mitglieder entfernen (Remove-ADGroupMember) und Befund erledigen.",
+            ]);
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.kind = "review";
+            s.line(format!(
+                "Get-ADGroupMember -Identity {} -Recursive | Where-Object objectClass -eq 'user' |\n    Get-ADUser -Properties LastLogonDate, PasswordLastSet, Enabled |\n    Sort-Object LastLogonDate | Format-Table SamAccountName, Enabled, LastLogonDate, PasswordLastSet -AutoSize",
+                q(sid)
+            ));
+            for u in members.iter().take(MAX_OBJECTS) {
+                let info = dir
+                    .users
+                    .get(u)
+                    .map(|x| {
+                        let state = if !x.enabled {
+                            "deaktiviert"
+                        } else if dir.is_inactive(x) {
+                            "inaktiv"
+                        } else {
+                            "aktiv"
+                        };
+                        match x.last_logon {
+                            Some(t) => {
+                                format!("{state}, letzte Anmeldung {}", t.format("%d.%m.%Y"))
+                            }
+                            None => format!("{state}, nie angemeldet"),
+                        }
+                    })
+                    .unwrap_or_default();
+                g.objects.push(Obj {
+                    label: dir.view(u).name,
+                    info,
+                });
+            }
+            g.objects_total = members.len();
+            g.script = Some(s.build());
+        }
+
+        "AD_KERBEROASTABLE" => {
+            let spns = dir
+                .users
+                .get(sid)
+                .map(|u| u.spns.clone())
+                .unwrap_or_default();
+            g.steps = steps(&[
+                "Herausfinden, welcher Dienst das Konto nutzt (SPNs unten, z. B. MSSQLSvc/… für SQL Server).",
+                "Am besten: Dienst auf ein gruppenverwaltetes Dienstkonto (gMSA) umstellen – das Kennwort wechselt dann automatisch und ist 120 Zeichen lang.",
+                "Falls nicht möglich: Kennwort mit mindestens 25 zufälligen Zeichen setzen und nur AES erlauben (Konto-Option „Dieses Konto unterstützt Kerberos AES 256“).",
+                "Wird ein SPN nicht mehr gebraucht: entfernen (Befehl im Skript als Kommentar).",
+                "Danach als erledigt markieren oder – bei gMSA-Umstellung später – als Ausnahme mit Begründung dokumentieren.",
+            ]);
+            g.warning = Some("SPNs nicht ohne Rücksprache entfernen – der zugehörige Dienst funktioniert sonst nicht mehr.".into());
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.kind = "review";
+            s.line(format!(
+                "Get-ADUser -Identity {} -Properties ServicePrincipalNames, PasswordLastSet, 'msDS-SupportedEncryptionTypes', MemberOf |\n    Format-List SamAccountName, Enabled, PasswordLastSet, ServicePrincipalNames, msDS-SupportedEncryptionTypes, MemberOf",
+                q(sid)
+            ));
+            s.line("# Nur AES erlauben (0x18 = AES128 + AES256):");
+            s.line(format!(
+                "#   Set-ADUser -Identity {} -Replace @{{'msDS-SupportedEncryptionTypes' = 24}}",
+                q(sid)
+            ));
+            for spn in &spns {
+                s.line(format!(
+                    "# SPN entfernen:  Set-ADUser -Identity {} -ServicePrincipalNames @{{Remove = {}}}",
+                    q(sid),
+                    q(spn)
+                ));
+                g.objects.push(Obj {
+                    label: spn.clone(),
+                    info: "SPN".into(),
+                });
+            }
+            g.objects_total = spns.len();
+            g.script = Some(s.build());
+        }
+
+        "AD_PWD_NEVER_EXPIRES" | "AD_OLD_PASSWORD" => {
+            let never = f.rule == "AD_PWD_NEVER_EXPIRES";
+            g.steps = if never {
+                steps(&[
+                    "Prüfen, ob es ein Dienstkonto ist (Name, Beschreibung, SPNs). Dienstkonten möglichst auf gMSA umstellen.",
+                    "Für persönliche Konten: Skript mit -Apply ausführen – das Kennwort unterliegt dann wieder der Kennwortrichtlinie.",
+                    "Ist das Kennwort älter als die maximale Gültigkeit, muss es bei der nächsten Anmeldung geändert werden – den Benutzer vorher informieren.",
+                    "Dienstkonten, die vorerst so bleiben müssen: als Ausnahme mit Begründung akzeptieren (langes Kennwort dokumentieren).",
+                ])
+            } else {
+                steps(&[
+                    "Klären, ob das Konto noch genutzt wird. Ungenutzte Konten besser deaktivieren.",
+                    "Skript mit -Apply ausführen: der Benutzer muss das Kennwort bei der nächsten Anmeldung ändern.",
+                    "Benutzer vorher informieren. Dienstkonten nicht so behandeln – deren Dienste würden ausfallen.",
+                ])
+            };
+            g.warning = Some(
+                "Bei Dienstkonten fällt der Dienst aus, sobald das Kennwort abläuft bzw. geändert werden muss. Nur für persönliche Konten anwenden."
+                    .into(),
+            );
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.ad = true;
+            if never {
+                s.step(
+                    &format!("{name}: „Kennwort läuft nie ab“ entfernen"),
+                    &format!(
+                        "Set-ADUser -Identity {} -PasswordNeverExpires $false",
+                        q(sid)
+                    ),
+                );
+            } else {
+                s.step(
+                    &format!("{name}: Kennwortänderung bei nächster Anmeldung erzwingen"),
+                    &format!(
+                        "Set-ADUser -Identity {} -ChangePasswordAtLogon $true",
+                        q(sid)
+                    ),
+                );
+            }
+            let info = dir
+                .users
+                .get(sid)
+                .map(|u| match u.pwd_last_set {
+                    Some(t) => format!("Kennwort gesetzt {}", t.format("%d.%m.%Y")),
+                    None => "Kennwort nie gesetzt".into(),
+                })
+                .unwrap_or_default();
+            g.objects.push(Obj {
+                label: name.clone(),
+                info,
+            });
+            g.objects_total = 1;
+            g.script = Some(s.build());
+        }
+
+        "AD_STALE_COMPUTER" => {
+            let mut computers: Vec<(&String, &crate::directory::AdUserRow)> = dir
+                .users
+                .iter()
+                .filter(|(_, u)| u.is_computer && u.enabled && dir.is_inactive(u))
+                .collect();
+            computers.sort_by(|a, b| a.1.sam.cmp(&b.1.sam));
+            g.steps = steps(&[
+                "Liste prüfen: Sind die Geräte wirklich ausgemustert? (Server in Wartung, Notebooks in Elternzeit …)",
+                "Skript mit -Apply ausführen: die Konten werden deaktiviert und mit Datum beschrieben – nicht gelöscht.",
+                "Nach einer Karenzzeit (z. B. 90 Tage) deaktivierte Konten löschen.",
+            ]);
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.ad = true;
+            s.line("$note = 'Deaktiviert ' + (Get-Date -Format 'dd.MM.yyyy') + ' (PermissionCenter: inaktiv)'");
+            let total = computers.len();
+            for (csid, u) in computers.into_iter().take(MAX_OBJECTS) {
+                let host = u.sam.trim_end_matches('$');
+                s.step(
+                    &format!("Computerkonto {host} deaktivieren"),
+                    &format!(
+                        "Disable-ADAccount -Identity {c}; Set-ADComputer -Identity {c} -Description $note",
+                        c = q(csid)
+                    ),
+                );
+                g.objects.push(Obj {
+                    label: host.to_string(),
+                    info: match u.last_logon {
+                        Some(t) => format!("letzte Anmeldung {}", t.format("%d.%m.%Y")),
+                        None => "nie angemeldet".into(),
+                    },
+                });
+            }
+            g.objects_total = total;
+            g.script = Some(s.build());
+        }
+
+        "LOCAL_ADMIN_BROAD" | "LOCAL_ADMIN_ORPHANED" | "LOCAL_ADMIN_USER" => {
+            g.steps = match f.rule.as_str() {
+                "LOCAL_ADMIN_BROAD" => steps(&[
+                    "Sofort handeln: Jeder Anwender kann den Server derzeit vollständig übernehmen.",
+                    "Prüfen, wer tatsächlich administrieren muss, und dafür eine Domänengruppe (z. B. „GG_Server_Admins“) in die lokale Gruppe aufnehmen.",
+                    "Skript mit -Apply ausführen: die breite Gruppe wird aus den lokalen Administratoren entfernt.",
+                ]),
+                "LOCAL_ADMIN_ORPHANED" => steps(&[
+                    "Skript ohne -Apply prüfen.",
+                    "Skript mit -Apply ausführen: der verwaiste Eintrag wird aus den lokalen Administratoren entfernt.",
+                ]),
+                _ => steps(&[
+                    "Klären, ob das Konto weiterhin Administrator sein muss.",
+                    "Wenn ja: über eine Domänengruppe berechtigen (Gruppe in die lokalen Administratoren aufnehmen, Benutzer in die Gruppe).",
+                    "Skript mit -Apply ausführen: der Direkteintrag wird entfernt. Neue Gruppenmitgliedschaft wirkt nach Neuanmeldung.",
+                ]),
+            };
+            if f.rule != "LOCAL_ADMIN_ORPHANED" {
+                g.warning = Some(
+                    "Nicht das eigene Konto oder die einzige Admin-Gruppe entfernen – sonst ist der Server nicht mehr administrierbar."
+                        .into(),
+                );
+            }
+            let mut s = ScriptBuilder::new(f, host_target.clone());
+            s.line("# Lokale Gruppe Administratoren (Name in Landessprache)");
+            s.line("$group = ([Security.Principal.SecurityIdentifier] 'S-1-5-32-544').Translate([Security.Principal.NTAccount]).Value.Split('\\')[1]");
+            s.line("$backup = Join-Path $env:ProgramData \"PermissionCenter\\acl-backup\\$stamp-lokale-admins.txt\"");
+            s.step(
+                "Mitgliederliste der lokalen Administratoren sichern",
+                "New-Item -ItemType Directory -Force (Split-Path $backup) | Out-Null; net localgroup $group | Out-File $backup -Encoding UTF8",
+            );
+            s.step(
+                &format!("{name} aus den lokalen Administratoren entfernen"),
+                &format!(
+                    "([ADSI] \"WinNT://$env:COMPUTERNAME/$group,group\").Remove({})",
+                    q(&format!("WinNT://{sid}"))
+                ),
+            );
+            s.line("if ($Apply) { Write-Host \"Sicherung: $backup\"; net localgroup $group }");
+            g.objects.push(Obj {
+                label: name.clone(),
+                info: format!("Mitglied der lokalen Administratoren auf {host}"),
+            });
+            g.objects_total = 1;
+            g.script = Some(s.build());
+        }
+
+        "FILE_EXPLICIT" => {
+            let rows = c
+                .query(
+                    "SELECT f.path, f.protected, COUNT(a.sid) FILTER (WHERE NOT a.inherited)
+                     FROM files f LEFT JOIN file_aces a ON a.system_id = f.system_id AND a.file_id = f.file_id
+                     WHERE f.system_id = $1 GROUP BY f.path, f.protected ORDER BY lower(f.path)",
+                    &[&sys],
+                )
+                .await?;
+            g.steps = steps(&[
+                "Liste prüfen: Sind die abweichenden Dateirechte gewollt (z. B. vertrauliche Einzeldokumente)?",
+                "Gewollte Ausnahmen besser in einen eigenen Ordner mit passenden Rechten verschieben.",
+                "Skript mit -Apply ausführen: die Dateien erhalten wieder nur die Rechte ihres Ordners (icacls /reset).",
+            ]);
+            g.warning = Some(
+                "Nach dem Zurücksetzen gelten für die Dateien die Ordnerrechte – Personen mit Zugriff auf den Ordner sehen dann auch diese Dateien."
+                    .into(),
+            );
+            let mut s = ScriptBuilder::new(f, host_target.clone());
+            s.acl = true;
+            let total = rows.len();
+            for r in rows.iter().take(MAX_OBJECTS) {
+                let (path, protected, explicit): (String, bool, i64) =
+                    (r.get(0), r.get(1), r.get(2));
+                s.step(
+                    &format!("{path}: auf Vererbung zurücksetzen"),
+                    &format!("Backup-Acl {p}; Invoke-Icacls {p} /reset", p = q(&path)),
+                );
+                g.objects.push(Obj {
+                    label: path,
+                    info: match (protected, explicit) {
+                        (true, n) => format!("Vererbung unterbrochen, {n} eigene Einträge"),
+                        (false, n) => format!("{n} eigene Einträge"),
+                    },
+                });
+            }
+            g.objects_total = total;
+            g.script = Some(s.build());
+        }
+
         _ => {
             g.steps = steps(&["Für diesen Befund gibt es keine Schritt-für-Schritt-Anleitung."]);
         }

@@ -312,7 +312,14 @@ export interface Settings {
   upload_token_required: boolean
   auth_mode: string
   ldap: { configured: boolean; url: string | null; base_dn: string | null; bind_dn: string | null; sync_interval_minutes: number }
-  analysis: { inactive_days: number; stale_scan_days: number; deep_explicit_depth: number; max_findings_per_rule: number }
+  analysis: {
+    inactive_days: number
+    stale_scan_days: number
+    deep_explicit_depth: number
+    max_findings_per_rule: number
+    password_max_age_days: number
+    privileged_max_members: number
+  }
   notify: {
     public_url: string | null
     min_severity: string

@@ -25,6 +25,23 @@ pub struct ScanReport {
     pub principals: Vec<PrincipalInfo>,
     pub errors: Vec<ScanError>,
     pub stats: ScanStats,
+    /// Dateien mit eigenen Berechtigungen (nur unter `scan.file_acl_paths`).
+    #[serde(default)]
+    pub files: Vec<FileRecord>,
+    /// Direkte Mitglieder der lokalen Gruppe Administratoren (S-1-5-32-544).
+    #[serde(default)]
+    pub local_admins: Option<Vec<PrincipalInfo>>,
+}
+
+/// Datei, deren Berechtigungen vom Ordner abweichen (eigene ACEs oder unterbrochene Vererbung).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRecord {
+    /// ID des (gemeldeten) Ordners, in dem die Datei liegt.
+    pub folder_id: u64,
+    pub name: String,
+    pub owner_sid: Option<String>,
+    pub inheritance_protected: bool,
+    pub aces: Vec<Ace>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -267,6 +284,9 @@ pub struct ScanStats {
     pub errors: u64,
     pub orphaned_aces: u64,
     pub duration_ms: u64,
+    /// Dateien mit eigenen Berechtigungen (Dateiebene).
+    #[serde(default)]
+    pub files_with_explicit_aces: u64,
 }
 
 /// Antwort des Servers auf einen Report-Upload.
@@ -310,6 +330,12 @@ pub struct AdUser {
     pub created: Option<DateTime<Utc>>,
     #[serde(default)]
     pub is_computer: bool,
+    /// Kennwort läuft nie ab (userAccountControl DONT_EXPIRE_PASSWORD).
+    #[serde(default)]
+    pub password_never_expires: bool,
+    /// Dienstprinzipalnamen (SPN) – bei Benutzerkonten Ziel für Kerberoasting.
+    #[serde(default)]
+    pub service_principal_names: Vec<String>,
     /// SIDs der Gruppen, in denen das Konto direkt Mitglied ist.
     #[serde(default)]
     pub member_of: Vec<String>,

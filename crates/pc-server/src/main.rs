@@ -82,8 +82,11 @@ enum Command {
         #[arg(long)]
         version: String,
         /// Privater Signaturschlüssel (aus gen-signing-key)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "signature")]
         signing_key: Option<PathBuf>,
+        /// Bereits erstellte Signatur (Base64), z. B. aus der release.json eines CI-Builds
+        #[arg(long)]
+        signature: Option<String>,
         #[arg(long)]
         notes: Option<String>,
         /// Statt lokal ablegen: an diesen PermissionCenter-Server hochladen (z. B. http://permcenter:8080)
@@ -149,6 +152,7 @@ async fn run(cli: Cli) -> Result<()> {
             file,
             version,
             signing_key,
+            signature: given_signature,
             notes,
             server,
             token,
@@ -165,8 +169,14 @@ async fn run(cli: Cli) -> Result<()> {
                             .map_err(|e| anyhow::anyhow!(e))?,
                     )
                 }
-                None => None,
+                None => given_signature.clone(),
             };
+            if let (Some(sig), Some(pk)) = (&signature, &cfg.client_update_public_key) {
+                // Früh prüfen, statt erst beim Server zu scheitern
+                let sha = pc_common::release::sha256_hex(&exe);
+                pc_common::release::verify(pk, version, &sha, sig)
+                    .map_err(|e| anyhow::anyhow!("Signatur passt nicht: {e}"))?;
+            }
             if let Some(base) = server {
                 let r = upload_release(
                     base,

@@ -21,6 +21,9 @@ pub struct AdUserRow {
     pub last_logon: Option<DateTime<Utc>>,
     pub created: Option<DateTime<Utc>>,
     pub is_computer: bool,
+    pub pwd_last_set: Option<DateTime<Utc>>,
+    pub pwd_never_expires: bool,
+    pub spns: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +77,8 @@ impl Directory {
         let mut users = HashMap::new();
         for r in c
             .query(
-                "SELECT sid, sam, upn, display_name, enabled, last_logon, created, is_computer FROM ad_users",
+                "SELECT sid, sam, upn, display_name, enabled, last_logon, created, is_computer,
+                        pwd_last_set, pwd_never_expires, COALESCE(spns, '{}') FROM ad_users",
                 &[],
             )
             .await?
@@ -89,6 +93,9 @@ impl Directory {
                     last_logon: r.get(5),
                     created: r.get(6),
                     is_computer: r.get(7),
+                    pwd_last_set: r.get(8),
+                    pwd_never_expires: r.get(9),
+                    spns: r.get(10),
                 },
             );
         }

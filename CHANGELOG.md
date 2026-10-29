@@ -12,13 +12,31 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 - Bearbeitungsstand je Befund (erledigt, Ausnahme mit Begründung), der Neuberechnungen überdauert. Der nächste Scan bzw. AD-Abgleich bestätigt Behebungen automatisch
 - Einstieg in den Audit-Assist über Dashboard, Audit und Befundliste; Kennzeichnung von Ausnahmen in Befundliste und Audit
 - `pc-server publish-client --server <url> --token <token>`: Client-Release lokal signieren und per API auf einen entfernten Server hochladen
+- `pc-server publish-client --signature <Base64>`: Release mit bereits vorhandener Signatur (z. B. aus CI) veröffentlichen
+- **Änderungsverlauf**: Unterschiede zwischen zwei Scans (explizite Berechtigungen, Vererbung, Besitzer, Freigaben), nur innerhalb gemeinsamer Scan-Wurzeln; Seite „Änderungen“, Reiter je System, Filter je Prinzipal
+- **Bewertungstrend**: Tageswerte je System, für Dateisysteme, AD und gesamt; Diagramme auf Dashboard und Systemseite
+- **Benachrichtigungen** per E-Mail (SMTP) und Webhook (Teams, Slack, JSON): neue Befunde ab einstellbarer Schwere, Verschlechterung der Note, Systeme ohne aktuellen Scan, Wochenbericht; Testversand in den Einstellungen; stündliche Neubewertung
+- **Exporte** als CSV (Excel-tauglich): Befunde, Audit, Berechtigungen je System, Änderungen, Zugriffe je Prinzipal, Zugriffsprüfung
+- **Druckberichte** (bzw. PDF über den Browser): Audit-Bericht und Zugriffsbericht je Benutzer/Gruppe
+- **Zugriffsprüfung**: wer hat Zugriff auf einen Pfad oder UNC-Pfad – Auflösung verschachtelter Gruppen und lokaler Administratoren bis zum Benutzer, Freigabeberechtigungen, Dateneigentümer
+- **Dateneigentümer** je Ordner (gilt für Unterordner), Pflege im Verzeichnisbaum und auf eigener Seite
+- AD-Prüfungen: privilegierte Konten deaktiviert/inaktiv, zu viele Mitglieder in privilegierten Gruppen, Kerberoasting (SPN an Benutzerkonto), „Kennwort läuft nie ab“, sehr alte Kennwörter, verwaiste Computerkonten – jeweils mit Audit-Assist-Anleitung
+- Client erfasst die Mitglieder der lokalen Administratoren; Regeln für breite Gruppen, verwaiste SIDs und Benutzer direkt in den lokalen Administratoren
+- Client-Dateiebene (`[scan] file_acl_paths`): Dateien mit eigenen Berechtigungen; Regel und Audit-Assist (Zurücksetzen auf Vererbung)
+- Client scannt mehrere Laufwerke bzw. Freigaben parallel (`[scan] parallel_roots`, Standard 2)
+- „Jetzt scannen“ in der Weboberfläche; der Client-Dienst fragt alle `[service] task_poll_minutes` nach Aufträgen
+- GitHub Actions: CI (Formatierung, Tests, Web, Client, Docker) und Release bei Tag (signierter Client als ZIP, Server-Image in ghcr.io)
+- Demodaten mit AD-Risikofällen (SPN, alte Kennwörter, verwaiste Computer, deaktivierter Domänen-Admin)
 
 ### Behoben
+- Empfehlung der Regel „System nicht aktuell gescannt“ nannte ein nicht vorhandenes Skript
 - `Install-PcClient.ps1` brach unter Windows PowerShell 5.1 mit `NativeCommandError` ab, sobald der Client Logzeilen auf stderr schrieb
 
 ### Geändert
 - Als Ausnahme akzeptierte Befunde zählen nicht mehr in Bewertung, Audit, Empfehlungen und Dashboard-Statistik
-- Datenbankschema Version 2 (`findings.fingerprint`, Tabelle `finding_states`). Die Migration erfolgt beim Start automatisch
+- Datenbankschema Version 3 (u. a. `findings.fingerprint`, `finding_states`, `changes`, `score_history`, `data_owners`, `local_admins`, `files`, `scan_requests`). Die Migration erfolgt beim Start automatisch
+- Report-Format um `files`, `local_admins` und `stats.files_with_explicit_aces` erweitert (abwärtskompatibel)
+- AD-Export (`Export-ADData.ps1`) und LDAP-Abgleich liefern zusätzlich „Kennwort läuft nie ab“ und SPNs
 - Verwaltungszeilen eines Client-Laufs (Start, Konfiguration, Dauer) erscheinen nur noch in der Logdatei, nicht mehr auf der Konsole
 
 ## [0.1.0] - 2026-10-29

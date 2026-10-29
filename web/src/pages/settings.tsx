@@ -66,6 +66,8 @@ export default function SettingsPage() {
             <Row k="System veraltet nach" v={`${data.analysis.stale_scan_days} Tagen`} />
             <Row k="Zu tiefe Rechte ab Ebene" v={String(data.analysis.deep_explicit_depth)} />
             <Row k="Max. Befunde je Regel" v={String(data.analysis.max_findings_per_rule)} />
+            <Row k="Kennwort veraltet nach" v={`${data.analysis.password_max_age_days} Tagen`} />
+            <Row k="Max. Mitglieder privilegierter Gruppen" v={String(data.analysis.privileged_max_members)} />
           </CardContent>
         </Card>
       </div>

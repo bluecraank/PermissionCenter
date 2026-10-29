@@ -1,6 +1,7 @@
 //! Windows-spezifische Systemaufrufe.
 
 pub mod fs;
+pub mod groups;
 pub mod resolver;
 pub mod shares;
 pub mod system;

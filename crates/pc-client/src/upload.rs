@@ -86,6 +86,24 @@ impl ServerClient {
         }
     }
 
+    /// Fragt, ob in der Weboberfläche „Jetzt scannen“ für dieses System angefordert wurde.
+    pub fn pending_scan(&self, hostname: &str) -> Result<bool> {
+        let url = self.url(&format!("/api/v1/client/tasks?hostname={hostname}"));
+        let mut req = self.agent.get(&url);
+        if let Some(t) = &self.token {
+            req = req.header("X-Api-Key", t);
+        }
+        let mut resp = req
+            .call()
+            .with_context(|| format!("Server {url} nicht erreichbar"))?;
+        match resp.status().as_u16() {
+            200 => Ok(resp.body_mut().read_json::<serde_json::Value>()?["scan"] == true),
+            // Ältere Server kennen den Endpunkt nicht
+            404 => Ok(false),
+            s => Err(anyhow!("Auftragsabfrage: Server antwortete mit {s}")),
+        }
+    }
+
     /// Lädt eine Datei vom Server (relativer Pfad).
     pub fn download(&self, path: &str, max_bytes: u64) -> Result<Vec<u8>> {
         let url = self.url(path);

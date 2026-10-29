@@ -38,7 +38,7 @@ Write-Host "Domäne: $($domain.DNSRoot) ($($domain.DomainSID))"
 
 Write-Host "Lese Benutzer…"
 $users = Get-ADUser -Filter * @common -Properties SamAccountName, UserPrincipalName, DisplayName, Enabled,
-    LastLogonDate, PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID
+    LastLogonDate, PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID, PasswordNeverExpires, ServicePrincipalNames
 Write-Host "Lese Computer…"
 $computers = Get-ADComputer -Filter * @common -Properties SamAccountName, Enabled, LastLogonDate,
     PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID
@@ -72,6 +72,8 @@ function Convert-Account($a, [bool] $isComputer) {
         password_last_set   = ConvertTo-Iso $a.PasswordLastSet
         created             = ConvertTo-Iso $a.whenCreated
         is_computer         = $isComputer
+        password_never_expires  = [bool]$a.PasswordNeverExpires
+        service_principal_names = @(if ($isComputer) { } else { $a.ServicePrincipalNames })
         member_of           = @($memberOf | Select-Object -Unique)
     }
 }

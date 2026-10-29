@@ -1,7 +1,17 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, ChevronRight, Folder, FolderLock, FolderOpen, FolderSearch, HardDrive, Link2Off, Share2 } from 'lucide-react'
+import {
+  AlertCircle,
+  ChevronRight,
+  Folder,
+  FolderLock,
+  FolderOpen,
+  FolderSearch,
+  HardDrive,
+  Link2Off,
+  Share2,
+} from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -10,6 +20,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { OwnerField } from '@/components/owner'
+import { FolderFiles } from '@/components/system-extras'
 import { EmptyState, Loading, PrincipalLink, RightsBadge, SeverityBadge, Spinner } from '@/components/common'
 import { api, type Folder as FolderT, type FolderDetail } from '@/lib/api'
 import { bytes, num } from '@/lib/format'
@@ -34,7 +45,13 @@ function TreeNode({
     queryFn: () => api.get<FolderT[]>(`/systems/${systemId}/folders?parent=${folder.local_id}`),
     enabled: open && folder.children > 0,
   })
-  const Icon = folder.is_root ? HardDrive : folder.explicit || folder.protected ? FolderLock : open ? FolderOpen : Folder
+  const Icon = folder.is_root
+    ? HardDrive
+    : folder.explicit || folder.protected
+      ? FolderLock
+      : open
+        ? FolderOpen
+        : Folder
   return (
     <div>
       <div
@@ -53,7 +70,11 @@ function TreeNode({
           }}
           aria-label={open ? 'Zuklappen' : 'Aufklappen'}
         >
-          {isFetching ? <Spinner className="size-3.5" /> : <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />}
+          {isFetching ? (
+            <Spinner className="size-3.5" />
+          ) : (
+            <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+          )}
         </button>
         <Icon className={cn('size-4 shrink-0', (folder.explicit || folder.protected) && 'text-sev-low')} />
         <span className="truncate">{folder.name}</span>
@@ -76,7 +97,14 @@ function TreeNode({
       </div>
       {open &&
         data?.map((c) => (
-          <TreeNode key={c.local_id} systemId={systemId} folder={c} level={level + 1} selected={selected} onSelect={onSelect} />
+          <TreeNode
+            key={c.local_id}
+            systemId={systemId}
+            folder={c}
+            level={level + 1}
+            selected={selected}
+            onSelect={onSelect}
+          />
         ))}
       {open && folder.children === 0 && folder.subfolder_total > 0 && (
         <div className="text-muted-foreground py-0.5 text-xs" style={{ paddingLeft: (level + 1) * 14 + 28 }}>
@@ -87,7 +115,15 @@ function TreeNode({
   )
 }
 
-export function FolderDetailPanel({ systemId, localId, onNavigate }: { systemId: number; localId: number; onNavigate: (id: number) => void }) {
+export function FolderDetailPanel({
+  systemId,
+  localId,
+  onNavigate,
+}: {
+  systemId: number
+  localId: number
+  onNavigate: (id: number) => void
+}) {
   const { data, isLoading } = useQuery({
     queryKey: ['folder', systemId, localId],
     queryFn: () => api.get<FolderDetail>(`/systems/${systemId}/folders/${localId}`),
@@ -111,11 +147,16 @@ export function FolderDetailPanel({ systemId, localId, onNavigate }: { systemId:
         <h3 className="mt-1 font-mono text-sm font-semibold break-all">{data.path}</h3>
         <div className="mt-2 flex flex-wrap gap-2">
           {data.explicit && <Badge variant="secondary">Eigene Berechtigungen</Badge>}
-          {data.protected && <Badge className="bg-sev-medium/20 text-sev-medium border-sev-medium/40" variant="outline">Vererbung unterbrochen</Badge>}
+          {data.protected && (
+            <Badge className="bg-sev-medium/20 text-sev-medium border-sev-medium/40" variant="outline">
+              Vererbung unterbrochen
+            </Badge>
+          )}
           {!data.explicit && !data.protected && <Badge variant="outline">Erbt Rechte</Badge>}
           {data.shares.map((s) => (
             <Badge key={s} variant="outline" className="gap-1">
-              <Share2 className="size-3" />\\{s}
+              <Share2 className="size-3" />
+              \\{s}
             </Badge>
           ))}
           {data.error && <Badge variant="destructive">{data.error}</Badge>}
@@ -130,7 +171,10 @@ export function FolderDetailPanel({ systemId, localId, onNavigate }: { systemId:
           k="Strang-Ursprung"
           v={
             data.acl_source_local_id && data.acl_source_local_id !== data.local_id ? (
-              <button className="truncate text-left hover:underline" onClick={() => onNavigate(data.acl_source_local_id!)}>
+              <button
+                className="truncate text-left hover:underline"
+                onClick={() => onNavigate(data.acl_source_local_id!)}
+              >
                 {data.acl_source_path}
               </button>
             ) : (
@@ -163,6 +207,7 @@ export function FolderDetailPanel({ systemId, localId, onNavigate }: { systemId:
       )}
 
       <AceTable title="Explizite Berechtigungen" aces={explicit} />
+      <FolderFiles systemId={systemId} localId={localId} />
       {inherited.length > 0 && <AceTable title="Geerbte Berechtigungen" aces={inherited} muted />}
     </div>
   )
@@ -235,7 +280,14 @@ export function FolderBrowser({ systemId }: { systemId: number }) {
         <CardContent className="px-2">
           <ScrollArea className="h-[65vh]">
             {data.map((r) => (
-              <TreeNode key={r.local_id} systemId={systemId} folder={r} level={0} selected={selected} onSelect={setSelected} />
+              <TreeNode
+                key={r.local_id}
+                systemId={systemId}
+                folder={r}
+                level={0}
+                selected={selected}
+                onSelect={setSelected}
+              />
             ))}
           </ScrollArea>
         </CardContent>
@@ -243,7 +295,9 @@ export function FolderBrowser({ systemId }: { systemId: number }) {
       <Card className="lg:col-span-3">
         <CardContent>
           {selected === null ? (
-            <EmptyState title="Ordner auswählen">Wählen Sie links einen Ordner, um dessen Berechtigungen zu sehen.</EmptyState>
+            <EmptyState title="Ordner auswählen">
+              Wählen Sie links einen Ordner, um dessen Berechtigungen zu sehen.
+            </EmptyState>
           ) : (
             <FolderDetailPanel systemId={systemId} localId={selected} onNavigate={setSelected} />
           )}

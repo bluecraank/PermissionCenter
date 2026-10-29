@@ -19,6 +19,7 @@ use pc_common::sid::{domain_prefix, sid_to_string};
 use pc_common::{AdGroup, AdSnapshot, AdUser};
 
 const UAC_ACCOUNTDISABLE: u32 = 0x2;
+const UAC_DONT_EXPIRE_PASSWORD: u32 = 0x10000;
 
 /// Speichert einen AD-Stand (ersetzt den bisherigen vollständig).
 pub async fn store_snapshot(
@@ -30,8 +31,9 @@ pub async fn store_snapshot(
         .await?;
     let ust = tx
         .prepare(
-            "INSERT INTO ad_users (sid, sam, upn, display_name, dn, enabled, last_logon, pwd_last_set, created, is_computer)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) ON CONFLICT (sid) DO NOTHING",
+            "INSERT INTO ad_users (sid, sam, upn, display_name, dn, enabled, last_logon, pwd_last_set, created, is_computer,
+                pwd_never_expires, spns)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (sid) DO NOTHING",
         )
         .await?;
     let gst = tx
@@ -55,6 +57,8 @@ pub async fn store_snapshot(
                 &u.password_last_set,
                 &u.created,
                 &u.is_computer,
+                &u.password_never_expires,
+                &u.service_principal_names,
             ],
         )
         .await?;
@@ -227,6 +231,7 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
         "whenCreated",
         "primaryGroupID",
         "objectClass",
+        "servicePrincipalName",
     ];
     let accounts = paged_search(
         &mut ldap,
@@ -298,6 +303,12 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
             password_last_set: filetime(first(e, "pwdLastSet")),
             created: generalized_time(first(e, "whenCreated")),
             is_computer,
+            password_never_expires: uac & UAC_DONT_EXPIRE_PASSWORD != 0,
+            service_principal_names: e
+                .attrs
+                .get("servicePrincipalName")
+                .cloned()
+                .unwrap_or_default(),
             member_of,
         });
     }

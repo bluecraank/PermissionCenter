@@ -1,6 +1,7 @@
 //! API für Änderungsverlauf und Bewertungstrend.
 
-use axum::extract::{Query, State};
+use axum::extract::{Path, Query, State};
+use axum::http::HeaderMap;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -16,6 +17,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/changes", get(changes))
         .route("/api/v1/history", get(history))
         .route("/api/v1/notify/test", post(notify_test))
+        .route("/api/v1/systems/{id}/local-admins", get(local_admins))
+        .route(
+            "/api/v1/systems/{id}/scan-request",
+            get(scan_request_status).post(scan_request),
+        )
+        .route("/api/v1/client/tasks", get(client_tasks))
+        .route(
+            "/api/v1/systems/{id}/folders/{local_id}/files",
+            get(folder_files),
+        )
         .route("/api/v1/notify/weekly", post(notify_weekly))
         .with_state(state)
 }
@@ -132,6 +143,128 @@ async fn changes(State(st): State<AppState>, Query(q): Query<ChangeQuery>) -> Ap
         "per_day": per_day,
         "labels": labels,
     })))
+}
+
+/// „Jetzt scannen“ anfordern – der Client-Dienst holt den Auftrag ab.
+async fn scan_request(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+    let c = st.db.get().await?;
+    c.execute(
+        "INSERT INTO scan_requests (system_id, requested_at) VALUES ($1, now())
+         ON CONFLICT (system_id) DO UPDATE SET requested_at = now(), picked_at = NULL",
+        &[&id],
+    )
+    .await?;
+    scan_request_status(State(st.clone()), Path(id)).await
+}
+
+async fn scan_request_status(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+    let c = st.db.get().await?;
+    let v = crate::db::query_one_json(
+        &**c,
+        "SELECT r.requested_at, r.picked_at, s.received_at AS last_scan_received
+         FROM systems y LEFT JOIN scan_requests r ON r.system_id = y.id
+         LEFT JOIN scans s ON s.id = y.last_scan_id WHERE y.id = $1",
+        &[&id],
+    )
+    .await?;
+    Ok(Json(v.unwrap_or(Value::Null)))
+}
+
+#[derive(Deserialize)]
+struct TaskQuery {
+    hostname: String,
+}
+
+/// Abfrage des Client-Dienstes: liegt ein Scan-Auftrag vor?
+async fn client_tasks(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TaskQuery>,
+) -> ApiResult {
+    crate::api::check_token(&st, &headers)?;
+    let c = st.db.get().await?;
+    let picked = c
+        .query_opt(
+            "UPDATE scan_requests r SET picked_at = now()
+             FROM systems y WHERE y.id = r.system_id AND lower(y.hostname) = lower($1) AND r.picked_at IS NULL
+             RETURNING r.requested_at",
+            &[&q.hostname],
+        )
+        .await?;
+    if picked.is_some() {
+        tracing::info!("Scan-Auftrag für {} abgeholt", q.hostname);
+    }
+    Ok(Json(json!({ "scan": picked.is_some() })))
+}
+
+async fn local_admins(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult {
+    let c = st.db.get().await?;
+    let c = &**c;
+    let dir = Directory::load(c, st.cfg.analysis.inactive_days).await?;
+    let rows: Vec<Value> = c
+        .query("SELECT sid FROM local_admins WHERE system_id = $1", &[&id])
+        .await?
+        .iter()
+        .map(|r| {
+            let sid: String = r.get(0);
+            let mut members = Vec::new();
+            if dir.groups.contains_key(&sid) {
+                members = dir
+                    .transitive_user_members(&sid)
+                    .iter()
+                    .map(|u| json!(dir.view(u)))
+                    .collect();
+            }
+            json!({ "principal": dir.view(&sid), "members": members })
+        })
+        .collect();
+    Ok(Json(json!(rows)))
+}
+
+async fn folder_files(
+    State(st): State<AppState>,
+    Path((id, local_id)): Path<(i64, i64)>,
+) -> ApiResult {
+    let c = st.db.get().await?;
+    let c = &**c;
+    let dir = Directory::load(c, st.cfg.analysis.inactive_days).await?;
+    let files = c
+        .query(
+            "SELECT file_id, path, protected, owner_sid FROM files
+             WHERE system_id = $1 AND folder_local_id = $2 ORDER BY lower(path)",
+            &[&id, &local_id],
+        )
+        .await?;
+    let mut out = Vec::new();
+    for f in &files {
+        let file_id: i64 = f.get(0);
+        let aces: Vec<Value> = c
+            .query(
+                "SELECT sid, ace_type, rights, inherited FROM file_aces
+                 WHERE system_id = $1 AND file_id = $2 ORDER BY inherited, sid",
+                &[&id, &file_id],
+            )
+            .await?
+            .iter()
+            .map(|a| {
+                json!({
+                    "principal": dir.view(a.get::<_, &str>(0)),
+                    "ace_type": a.get::<_, String>(1),
+                    "rights_label": pc_common::rights::Rights::parse(a.get(2)).label_de(),
+                    "inherited": a.get::<_, bool>(3),
+                })
+            })
+            .collect();
+        let path: String = f.get(1);
+        out.push(json!({
+            "name": path.rsplit('\\').next().unwrap_or(&path),
+            "path": path,
+            "protected": f.get::<_, bool>(2),
+            "owner": f.get::<_, Option<String>>(3).map(|o| dir.view(&o)),
+            "aces": aces,
+        }));
+    }
+    Ok(Json(json!(out)))
 }
 
 async fn notify_test(State(st): State<AppState>) -> ApiResult {

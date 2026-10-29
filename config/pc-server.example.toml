@@ -55,3 +55,32 @@ stale_scan_days = 7
 deep_explicit_depth = 6
 # Maximale Einzelbefunde je Regel und System
 max_findings_per_rule = 500
+# Kennwörter älter als so viele Tage gelten als veraltet
+password_max_age_days = 365
+# Mehr aktive Mitglieder in einer privilegierten Gruppe (Domänen-Admins …) sind ein Befund
+privileged_max_members = 5
+
+[notify]
+# Adresse der Weboberfläche für Links in Nachrichten
+# public_url = "http://permcenter.firma.local:8080"
+# Neue Befunde ab dieser Schwere melden: critical, high, medium, low, info oder off
+min_severity = "high"
+# Melden, wenn sich die Note gesamt, des AD oder eines Systems verschlechtert
+grade_drop = true
+# Wochenbericht (Wochentag und Uhrzeit, Serverzeit) – auskommentiert = aus
+# weekly_summary = "mo 07:00"
+
+[notify.smtp]
+# host = "mail.firma.local"
+port = 587
+# starttls (587), tls (465) oder none (internes Relay ohne Verschlüsselung)
+security = "starttls"
+# username = "permcenter@firma.local"
+# password = "geheim"
+# from = "PermissionCenter <permcenter@firma.local>"
+# to = ["it-security@firma.local"]
+
+# Webhooks: format = "teams" (Workflows-Webhook), "slack" (auch Mattermost, Rocket.Chat) oder "json"
+# [[notify.webhooks]]
+# url = "https://prod-00.westeurope.logic.azure.com/workflows/…"
+# format = "teams"

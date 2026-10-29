@@ -23,18 +23,23 @@ Berechtigungsanalyse für Windows-Dateiserver und Active Directory.
 
 | Bereich | Umfang |
 |---|---|
-| Scan | Alle festen Laufwerke, lokale Freigaben (inkl. Freigabeberechtigungen), optional Netzlaufwerke/UNC-Pfade. Pfade über 260 Zeichen, `SeBackupPrivilege` (liest auch Ordner ohne Admin-Zugriff), Junctions werden nicht verfolgt |
+| Scan | Alle festen Laufwerke, lokale Freigaben (inkl. Freigabeberechtigungen), optional Netzlaufwerke/UNC-Pfade, mehrere Laufwerke parallel. Pfade über 260 Zeichen, `SeBackupPrivilege` (liest auch Ordner ohne Admin-Zugriff), Junctions werden nicht verfolgt. Zusätzlich die Mitglieder der lokalen Administratoren und – für ausgewählte Pfade – Dateien mit eigenen Berechtigungen |
 | Ausschlüsse | Systemordner (`C:\Windows`, `Program Files`, `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `AppData` …), Platzhalter, `%VAR%`, Ordner mit Attribut System+Versteckt |
 | Verzeichnisstränge | Jeder Ordner kennt seinen `acl_source` (nächster Vorfahr mit eigenen Rechten). Übertragen werden nur Ordner mit abweichenden Rechten, ihre Vorfahren und die obersten Ebenen; alle anderen erben exakt |
 | Verwaiste Einträge | Nicht auflösbare SIDs (Client) und Domänen-SIDs, die im AD nicht mehr existieren (Server); auch verwaiste Besitzer |
 | Active Directory | LDAP-Synchronisation (auch periodisch) oder JSON-Import (`tools/Export-ADData.ps1`): Benutzer, Computer, Gruppen, verschachtelte Mitgliedschaften |
-| Analyse | 18 Prüfregeln, z. B. verwaiste SIDs, Schreibrechte für „Jeder“, offene Freigaben, deaktivierte/inaktive Benutzer mit Rechten, Direktberechtigungen statt AGDLP, leere/verwaiste/ungenutzte Gruppen |
+| Analyse | 28 Prüfregeln, z. B. verwaiste SIDs, Schreibrechte für „Jeder“, offene Freigaben, deaktivierte/inaktive Benutzer mit Rechten, Direktberechtigungen statt AGDLP, leere/verwaiste/ungenutzte Gruppen, lokale Administratoren, Dateien mit eigenen Rechten. Im AD außerdem: inaktive Konten in privilegierten Gruppen, zu viele Domänen-Admins, Kerberoasting (SPN an Benutzerkonten), „Kennwort läuft nie ab“, sehr alte Kennwörter, verwaiste Computerkonten |
 | Audit | Punktwert 0–100 und Note A–F je System, für das AD und gesamt; Checkliste bestanden/nicht bestanden |
 | Empfehlungen | Priorisierte Maßnahmen je Regel mit Aufwandsschätzung und betroffenen Systemen |
 | Audit-Assist | Führt Schritt für Schritt durch alle offenen Befunde (wichtigste zuerst): Anleitung, betroffene Objekte und ein fertiges PowerShell-Skript je Befund. Erledigte Befunde werden beim nächsten Scan bzw. AD-Abgleich automatisch bestätigt, Ausnahmen mit Begründung zählen nicht in die Bewertung |
+| Änderungsverlauf | Was sich zwischen zwei Scans an expliziten Berechtigungen, Vererbung, Besitzern und Freigaben geändert hat – je System, Pfad oder Prinzipal; Bewertungstrend über die Zeit |
+| Benachrichtigungen | E-Mail und Webhooks (Teams, Slack) bei neuen kritischen/hohen Befunden, Verschlechterung der Note und Systemen ohne aktuellen Scan; Wochenbericht |
+| Zugriffsprüfung | „Wer hat Zugriff auf `\\FS01\Daten\Vertrieb`?“ – Gruppen werden bis zum einzelnen Benutzer aufgelöst, inkl. Freigabeberechtigungen und Dateneigentümer |
+| Dateneigentümer | Fachlich verantwortliche Person je Ordner (gilt für Unterordner), sichtbar in Zugriffsprüfung und Exporten |
+| Berichte und Exporte | Audit-Bericht und Zugriffsbericht je Person zum Drucken bzw. als PDF; CSV (Excel) für Befunde, Audit, Berechtigungen, Änderungen, Zugriffe |
 | Zusammenhänge | Für jeden Benutzer und jede Gruppe: direkte Zugriffe, Zugriffe über (verschachtelte) Gruppen, Mitglieder, Befunde |
 | Visualisierung | Interaktive Graphen: IT-Landschaft (Domäne → Systeme → Freigaben ↔ Gruppen), Berechtigungsstränge je System, Beziehungen je Prinzipal |
-| Betrieb | Docker Compose mit PostgreSQL, Client als Windows-Dienst oder geplante Aufgabe, signierte OTA-Updates, rotierende Logdateien |
+| Betrieb | Docker Compose mit PostgreSQL, Client als Windows-Dienst oder geplante Aufgabe, „Jetzt scannen“ aus der Weboberfläche, signierte OTA-Updates, rotierende Logdateien, CI/Release über GitHub Actions |
 
 ## Schnellstart Server (Docker Compose)
 
@@ -97,6 +102,25 @@ Unter **Auswertung → Audit-Assist** (oder „Im Audit-Assist beheben“ an ein
 
 Der Server selbst ändert nichts an Dateisystemen oder AD. Er erzeugt nur die Skripte.
 
+## Benachrichtigungen
+
+In `.env` (oder `[notify]` in `pc-server.toml`) mindestens einen Kanal eintragen und den Container neu starten:
+
+```bash
+PC_PUBLIC_URL=http://10.50.10.143:8089          # für Links in den Nachrichten
+PC_SMTP_HOST=mail.firma.local                   # E-Mail (STARTTLS auf 587)
+PC_SMTP_FROM=permcenter@firma.local
+PC_SMTP_TO=it-security@firma.local,admin@firma.local
+PC_WEBHOOK_TEAMS=https://…                      # Teams: Workflow „Bei Empfang einer Webhookanforderung“
+PC_NOTIFY_WEEKLY="mo 07:00"                     # Wochenbericht
+```
+
+Gemeldet werden neue Befunde ab `PC_NOTIFY_MIN_SEVERITY` (Standard: hoch), jede Verschlechterung der Note (gesamt, AD, je System) und Systeme ohne aktuellen Scan. Der Server bewertet dazu stündlich neu. Unter *Einstellungen → Benachrichtigungen* lässt sich eine Testnachricht schicken.
+
+## Jetzt scannen
+
+Auf der Seite eines Systems fordert **Jetzt scannen** einen Scan an. Der Client-Dienst fragt alle `task_poll_minutes` (Standard 5) beim Server nach und startet den Scan sofort. Bei Betrieb als geplante Aufgabe wird nicht nachgefragt; dort `Start-ScheduledTask PermissionCenter-Scan` verwenden.
+
 ## Konfiguration
 
 Beide Programme nutzen TOML-Dateien: `schlüssel = wert`, Abschnitte und Kommentare. Kommentierte Vorlagen liegen unter [config/](config/):
@@ -121,9 +145,23 @@ Beide Programme nutzen TOML-Dateien: `schlüssel = wert`, Abschnitte und Komment
        --server http://permcenter:8080 --token <ein Wert aus PC_API_TOKENS> --notes "…"
    ```
    Ohne `--server` legt `publish-client` das Release im lokalen `client_releases_dir` ab (z. B. direkt auf dem Server).
+   Liegt die Signatur schon vor (z. B. aus der `release.json` eines GitHub-Releases), genügt `--signature <Base64>` statt `--signing-key`.
    Rohe API: `POST /api/v1/client/releases?version=0.2.0&signature=…` mit `X-Api-Key` und der EXE als Body.
 
 Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ein Update installiert wird, müssen **Größe, SHA-256 und Ed25519-Signatur** stimmen; die Signatur deckt Version und Inhalt gemeinsam ab, ein Downgrade mit einer alten Signatur ist also nicht möglich. Danach tauscht der Client seine EXE aus und startet neu. Der Dienst beendet sich dazu mit Code 10, die Dienst-Wiederherstellung startet ihn wieder. Ohne `public_key` verweigert der Client Updates, solange `require_signature = true` gilt (Standard).
+
+### Releases über GitHub Actions
+
+- `.github/workflows/ci.yml` prüft jeden Push: Formatierung, Tests, Web-Lint/Build, Client-Build, Docker-Build.
+- `.github/workflows/release.yml` läuft bei einem Tag `v<Version>` (muss zu `Cargo.toml` passen):
+  - Es baut `pc-client.exe` und signiert sie mit dem Repository-Secret `PC_SIGNING_KEY` (Inhalt der Schlüsseldatei aus `gen-signing-key`).
+  - Es veröffentlicht ein ZIP mit Client, Installationsskript, Beispielkonfiguration und `release.json`.
+  - Es schiebt das Server-Image nach `ghcr.io/<owner>/permissioncenter-server:<version>`.
+- Danach den Client auf dem eigenen Server bereitstellen:
+  ```powershell
+  .\pc-server.exe publish-client --file .\pc-client.exe --version 0.2.0 `
+      --signature <signature aus release.json> --server http://permcenter:8080 --token <API-Token>
+  ```
 
 ## Logging (Client)
 

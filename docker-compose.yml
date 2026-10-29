@@ -50,6 +50,20 @@ services:
       PC_LDAP_BASE_DN: ${PC_LDAP_BASE_DN:-}
       PC_LDAP_SYNC_INTERVAL_MINUTES: ${PC_LDAP_SYNC_INTERVAL_MINUTES:-0}
       PC_CLIENT_UPDATE_PUBLIC_KEY: ${PC_CLIENT_UPDATE_PUBLIC_KEY:-}
+      PC_PUBLIC_URL: ${PC_PUBLIC_URL:-}
+      PC_NOTIFY_MIN_SEVERITY: ${PC_NOTIFY_MIN_SEVERITY:-high}
+      PC_NOTIFY_WEEKLY: ${PC_NOTIFY_WEEKLY:-}
+      PC_SMTP_HOST: ${PC_SMTP_HOST:-}
+      PC_SMTP_PORT: ${PC_SMTP_PORT:-587}
+      PC_SMTP_SECURITY: ${PC_SMTP_SECURITY:-starttls}
+      PC_SMTP_USER: ${PC_SMTP_USER:-}
+      PC_SMTP_PASSWORD: ${PC_SMTP_PASSWORD:-}
+      PC_SMTP_FROM: ${PC_SMTP_FROM:-}
+      PC_SMTP_TO: ${PC_SMTP_TO:-}
+      PC_WEBHOOK_TEAMS: ${PC_WEBHOOK_TEAMS:-}
+      PC_WEBHOOK_SLACK: ${PC_WEBHOOK_SLACK:-}
+      # Zeitzone für Wochenbericht und Zeitstempel in Nachrichten
+      TZ: ${TZ:-Europe/Berlin}
       PC_LOG: ${PC_LOG:-info,tower_http=warn}
     volumes:
       # Client-Releases für OTA-Updates (docker compose exec server pc-server publish-client …)

@@ -12,14 +12,16 @@
 
 ## Datenfluss
 
-1. **Scan** (Client, eigener Thread mit 128-MB-Stack für tiefe Bäume): Rekursion je Wurzel. Jeder Ordner wird einmal mit `READ_CONTROL | FILE_LIST_DIRECTORY` und `FILE_FLAG_BACKUP_SEMANTICS` geöffnet. Aus diesem Handle liest der Client Security-Descriptor (`GetSecurityInfo`) und Inhalt (`GetFileInformationByHandleEx`, `FILE_FULL_DIR_INFO`).
+1. **Scan** (Client, je Wurzel ein Thread mit 128-MB-Stack für tiefe Bäume, bis zu `parallel_roots` gleichzeitig; die Ordner-IDs der Teilergebnisse werden beim Zusammenführen fortlaufend neu nummeriert): Rekursion je Wurzel. Jeder Ordner wird einmal mit `READ_CONTROL | FILE_LIST_DIRECTORY` und `FILE_FLAG_BACKUP_SEMANTICS` geöffnet. Aus diesem Handle liest der Client Security-Descriptor (`GetSecurityInfo`) und Inhalt (`GetFileInformationByHandleEx`, `FILE_FULL_DIR_INFO`).
 2. **Reduktion** („relevant“): Ein Ordner wird gemeldet, wenn er eigene ACEs hat, die Vererbung unterbrochen ist, ein Fehler auftrat, der Besitzer verwaist ist, er eine Freigabe ist oder in den obersten `skeleton_depth` Ebenen liegt. Seine Vorfahren werden mitgemeldet (Stack-basiert, ohne den ganzen Baum im Speicher zu halten). `subfolder_total` zählt alle Unterordner, auch die nicht gemeldeten.
 3. **Stränge**: `acl_source_id` verweist auf den nächsten Vorfahren (bzw. den Ordner selbst), dessen ACL die Rechte bestimmt. Jeder nicht gemeldete Ordner erbt die Rechte seines nächsten gemeldeten Vorfahren.
 4. **SID-Auflösung** mit Cache (`LookupAccountSidW`). `ERROR_NONE_MAPPED` gilt als verwaist, außer bei bekannten SIDs; andere Fehler (z. B. DC nicht erreichbar) ergeben `unknown`.
 5. **Lokale DB** (`%ProgramData%\PermissionCenter\pc-client.db`): Scan + gzip-Nutzlast + normalisierte Tabellen. Nicht übertragene Scans bleiben in der Outbox.
 6. **Upload**: `POST /api/v1/reports`, JSON gzip-komprimiert, Header `X-Api-Key`.
 7. **Ingest** (eine Transaktion, Advisory-Lock je System): System anlegen/aktualisieren, Scan-Historie speichern. Ist der Scan der neueste, werden die Detaildaten des Systems ersetzt (`COPY BINARY` für Ordner und ACEs).
-8. **Analyse** (gleiche Transaktion, globaler Advisory-Lock): komplette Neuberechnung aller Befunde. Sie läuft auch nach jedem AD-Abgleich und auf Anforderung.
+8. **Analyse** (gleiche Transaktion, globaler Advisory-Lock): komplette Neuberechnung aller Befunde. Sie läuft auch nach jedem AD-Abgleich, stündlich und auf Anforderung.
+9. **Änderungen**: Vor dem Ersetzen liest der Ingest den bisherigen Stand (explizite ACEs, Vererbung, Besitzer, Freigabe-ACEs) und vergleicht ihn mit dem neuen – nur unterhalb von Wurzeln, die in beiden Scans vorkommen (ein Teil-Scan erzeugt so keine Scheinänderungen). Höchstens 20 000 Einträge je Scan.
+10. **Benachrichtigung**: Die Analyse liefert neue Befunde (Fingerprint vorher nicht vorhanden) und Notenverschlechterungen (Vergleich mit dem letzten Wert in `score_history`). Nach dem Commit verschickt ein Hintergrund-Task die Nachricht per SMTP und Webhook. Die allererste Analyse meldet nichts.
 
 ## Datenmodell (Server)
 
@@ -29,6 +31,12 @@ systems ─┬─< scans                 (Historie je Upload, Kennzahlen, Wurzel
          ├─< shares ─< share_aces
          └─< findings              (system_id NULL = AD-Befund, fingerprint = stabile Kennung)
 finding_states                      (Audit-Assist: fixed | accepted | resolved je fingerprint)
+changes                             (Änderungsverlauf je System und Scan)
+score_history                       (Tageswerte der Bewertung: total, infra, ad, system)
+data_owners                         (Dateneigentümer je System und Pfad)
+local_admins                        (Mitglieder der lokalen Administratoren, neuester Scan)
+files ─< file_aces                  (Dateien mit eigenen Rechten, neuester Scan)
+scan_requests                       („Jetzt scannen“: angefordert / abgeholt)
 principals                          (Auflösung der Clients: Name, Domäne, Art)
 ad_users, ad_groups, ad_members     (AD-Stand, wird je Abgleich ersetzt)
 meta                                (Schema-Version, AD-Domäne/SID, Zeitstempel)
@@ -68,8 +76,26 @@ Je System werden nur die Detaildaten des neuesten Scans gehalten. Das hält die 
 | `AD_UNUSED_GROUP` | Info | Gruppe weder direkt noch über Verschachtelung in einer Berechtigung |
 | `AD_INACTIVE_USER` | Niedrig | Aktiviertes, aber inaktives Konto |
 | `AD_DISABLED_IN_GROUPS` | Info | Deaktivierte Konten sind noch Gruppenmitglied |
+| `LOCAL_ADMIN_BROAD` | Kritisch | Jeder, Authentifizierte Benutzer, Benutzer oder Domänen-Benutzer in den lokalen Administratoren |
+| `LOCAL_ADMIN_ORPHANED` | Mittel | Verwaiste SID in den lokalen Administratoren |
+| `LOCAL_ADMIN_USER` | Mittel | Benutzerkonto direkt in den lokalen Administratoren (außer RID 500) |
+| `FILE_EXPLICIT` | Niedrig | Dateien mit eigenen Berechtigungen (nur bei aktivierter Dateiebene) |
+| `AD_PRIVILEGED_STALE` | Hoch | Deaktiviertes/inaktives Konto (auch verschachtelt) in Administratoren, Domänen-, Schema-, Organisations-Admins, Konten-/Server-/Druck-/Sicherungs-Operatoren, Richtlinien-Erstellern |
+| `AD_KERBEROASTABLE` | Hoch | Aktives Benutzerkonto mit SPN (außer krbtgt) |
+| `AD_PRIVILEGED_MANY` | Mittel | Mehr als `privileged_max_members` aktive Mitglieder in einer privilegierten Gruppe |
+| `AD_PWD_NEVER_EXPIRES` | Mittel | Aktives Benutzerkonto mit „Kennwort läuft nie ab“ |
+| `AD_OLD_PASSWORD` | Niedrig | Kennwort älter als `password_max_age_days` |
+| `AD_STALE_COMPUTER` | Niedrig | Aktivierte, aber inaktive Computerkonten (zusammengefasst) |
 
 **Bewertung**: Strafpunkte = Σ Gewicht(Schwere) × min(3, 1 + log₁₀(betroffene Objekte)); Gewichte: Kritisch 25, Hoch 12, Mittel 5, Niedrig 1,5, Info 0. Punktwert = 100 · e^(−Strafpunkte/80). Noten: A ≥ 90, B ≥ 75, C ≥ 60, D ≥ 45, E ≥ 30, sonst F.
+
+## Zugriffsprüfung
+
+Für einen Pfad (lokal mit System oder als UNC über die Freigabe) sucht der Server den tiefsten gemeldeten Ordner auf dem Weg. Liegt der Pfad darunter, gelten dessen container-vererbbare ACEs (`CI`, bei `NP` nur eine Ebene tief); sonst die ACEs des Ordners ohne „nur Unterobjekte“. Gruppen werden über die AD-Mitgliedschaften transitiv aufgelöst, `VORDEFINIERT\Administratoren` über die gemeldeten lokalen Administratoren. Breite Gruppen (Jeder, Domänen-Benutzer …) werden nicht aufgelöst, sondern als „alle Benutzer“ ausgewiesen. Rechte je Benutzer = Oder-Verknüpfung der erlaubten Masken; Verweigerungen werden getrennt angezeigt. Freigabeberechtigungen werden daneben gezeigt (wirksam ist das strengere Recht).
+
+## Jetzt scannen
+
+`POST /api/v1/systems/{id}/scan-request` legt einen Auftrag an. Der Client-Dienst fragt alle `task_poll_minutes` `GET /api/v1/client/tasks?hostname=…` (mit `X-Api-Key`), übernimmt den Auftrag (`picked_at`) und scannt. Der nächste Upload des Systems löscht den abgeholten Auftrag.
 
 ## Audit-Assist
 

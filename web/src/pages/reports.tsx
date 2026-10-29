@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Printer, ShieldCheck } from 'lucide-react'
@@ -19,6 +19,7 @@ import { date, dateTime, kindLabel, num, statusLabel } from '@/lib/format'
 
 /** Rahmen eines Druckberichts (A4, ohne Navigation). */
 function ReportShell({ title, subtitle, back, children }: { title: string; subtitle?: ReactNode; back: string; children: ReactNode }) {
+  const [created] = useState(() => new Date().toISOString())
   return (
     <div className="bg-background min-h-svh">
       <div className="no-print bg-muted/60 sticky top-0 z-10 border-b">
@@ -45,7 +46,7 @@ function ReportShell({ title, subtitle, back, children }: { title: string; subti
           <div className="text-muted-foreground flex items-center gap-2 text-right text-xs">
             <div>
               <div className="text-foreground font-semibold">PermissionCenter</div>
-              <div>Erstellt {dateTime(new Date().toISOString())}</div>
+              <div>Erstellt {dateTime(created)}</div>
             </div>
             <ShieldCheck className="size-6" />
           </div>

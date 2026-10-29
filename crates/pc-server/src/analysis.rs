@@ -120,6 +120,38 @@ pub const RULES: &[Rule] = &[
         recommendation: "Dienst bzw. geplante Aufgabe des Clients prüfen (Install-PcClient.ps1) und Erreichbarkeit des Servers sicherstellen.",
     },
     Rule {
+        id: "LOCAL_ADMIN_BROAD",
+        severity: Severity::Critical,
+        scope: "system",
+        title: "Alle Benutzer sind lokale Administratoren",
+        description: "Jeder, Authentifizierte Benutzer, Benutzer oder Domänen-Benutzer sind Mitglied der lokalen Administratorengruppe – jeder Anwender hat damit volle Kontrolle über den Server.",
+        recommendation: "Breite Gruppe sofort aus den lokalen Administratoren entfernen und Administration über eine eigene Admin-Gruppe regeln.",
+    },
+    Rule {
+        id: "LOCAL_ADMIN_ORPHANED",
+        severity: Severity::Medium,
+        scope: "system",
+        title: "Verwaiste SID in lokalen Administratoren",
+        description: "Die lokale Administratorengruppe enthält ein Konto, das nicht mehr existiert.",
+        recommendation: "Eintrag aus der lokalen Gruppe Administratoren entfernen.",
+    },
+    Rule {
+        id: "LOCAL_ADMIN_USER",
+        severity: Severity::Medium,
+        scope: "system",
+        title: "Benutzer direkt lokaler Administrator",
+        description: "Ein Benutzerkonto ist direkt Mitglied der lokalen Administratoren. Das ist schwer nachvollziehbar und wird beim Ausscheiden oft vergessen.",
+        recommendation: "Administrative Rechte über eine Domänengruppe (z. B. „GG_Server_Admins“) vergeben, die in die lokale Gruppe aufgenommen wird; Direkteintrag entfernen.",
+    },
+    Rule {
+        id: "FILE_EXPLICIT",
+        severity: Severity::Low,
+        scope: "system",
+        title: "Dateien mit eigenen Berechtigungen",
+        description: "Einzelne Dateien haben vom Ordner abweichende Berechtigungen. Solche Ausnahmen sind kaum zu überblicken (nur bei aktivierter Dateiebene erfasst).",
+        recommendation: "Dateiberechtigungen auf die Vererbung zurücksetzen und den Zugriff über Ordner regeln.",
+    },
+    Rule {
         id: "DIRECT_USER_ACE",
         severity: Severity::Low,
         scope: "system",
@@ -206,6 +238,54 @@ pub const RULES: &[Rule] = &[
         title: "Inaktives Benutzerkonto",
         description: "Aktiviertes Konto ohne Anmeldung im konfigurierten Zeitraum.",
         recommendation: "Konto deaktivieren und nach Karenzzeit löschen.",
+    },
+    Rule {
+        id: "AD_PRIVILEGED_STALE",
+        severity: Severity::High,
+        scope: "ad",
+        title: "Privilegiertes Konto deaktiviert oder inaktiv",
+        description: "Ein deaktiviertes oder lange nicht genutztes Konto ist (auch über Verschachtelung) Mitglied einer administrativen Gruppe wie Domänen-Admins.",
+        recommendation: "Konto aus allen privilegierten Gruppen entfernen. Administrative Rechte nur für aktiv genutzte, persönliche Admin-Konten.",
+    },
+    Rule {
+        id: "AD_KERBEROASTABLE",
+        severity: Severity::High,
+        scope: "ad",
+        title: "Benutzerkonto mit SPN (Kerberoasting)",
+        description: "Für Benutzerkonten mit Dienstprinzipalnamen (SPN) kann jeder Domänenbenutzer ein Kerberos-Ticket anfordern und das Kennwort offline knacken.",
+        recommendation: "Dienst auf ein gruppenverwaltetes Dienstkonto (gMSA) umstellen; sonst Kennwort mit mindestens 25 Zeichen, nur AES und regelmäßig wechseln. Nicht benötigte SPNs entfernen.",
+    },
+    Rule {
+        id: "AD_PRIVILEGED_MANY",
+        severity: Severity::Medium,
+        scope: "ad",
+        title: "Zu viele Mitglieder in privilegierter Gruppe",
+        description: "Eine administrative Gruppe hat mehr aktive Mitglieder als konfiguriert. Jedes dieser Konten ist ein lohnendes Angriffsziel.",
+        recommendation: "Mitglieder überprüfen und auf das Nötigste reduzieren; Aufgaben über delegierte Rechte statt Domänen-Admins lösen.",
+    },
+    Rule {
+        id: "AD_PWD_NEVER_EXPIRES",
+        severity: Severity::Medium,
+        scope: "ad",
+        title: "Kennwort läuft nie ab",
+        description: "Für ein aktives Benutzerkonto ist „Kennwort läuft nie ab“ gesetzt.",
+        recommendation: "Option entfernen. Dienstkonten auf gMSA umstellen oder mit langem Kennwort als Ausnahme dokumentieren.",
+    },
+    Rule {
+        id: "AD_OLD_PASSWORD",
+        severity: Severity::Low,
+        scope: "ad",
+        title: "Kennwort sehr alt",
+        description: "Das Kennwort eines aktiven Benutzerkontos wurde länger als der konfigurierte Zeitraum nicht geändert.",
+        recommendation: "Kennwortänderung erzwingen (bei der nächsten Anmeldung ändern) oder Konto prüfen.",
+    },
+    Rule {
+        id: "AD_STALE_COMPUTER",
+        severity: Severity::Low,
+        scope: "ad",
+        title: "Verwaiste Computerkonten",
+        description: "Aktivierte Computerkonten ohne Anmeldung im konfigurierten Zeitraum – meist ausgemusterte Geräte.",
+        recommendation: "Konten deaktivieren und nach einer Karenzzeit löschen.",
     },
     Rule {
         id: "AD_DISABLED_IN_GROUPS",
@@ -475,6 +555,67 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
         });
     }
 
+    // --- Lokale Administratoren ---
+    for r in tx
+        .query("SELECT system_id, sid FROM local_admins", &[])
+        .await?
+    {
+        let (system_id, sid): (i64, String) = (r.get(0), r.get(1));
+        let name = dir.view(&sid).name;
+        let (rule_id, detail) = if dir.is_orphaned(&sid) {
+            (
+                "LOCAL_ADMIN_ORPHANED",
+                "Konto existiert nicht mehr".to_string(),
+            )
+        } else if wellknown::is_broad_principal(&sid) {
+            (
+                "LOCAL_ADMIN_BROAD",
+                format!("{name} ist Mitglied der lokalen Administratoren"),
+            )
+        } else if dir.is_user(&sid) && rid(&sid) != Some(500) {
+            let state = match dir.users.get(&sid) {
+                Some(u) if !u.enabled => " (Konto deaktiviert)",
+                Some(u) if dir.is_inactive(u) => " (Konto inaktiv)",
+                _ => "",
+            };
+            ("LOCAL_ADMIN_USER", format!("{name}{state}"))
+        } else {
+            continue;
+        };
+        findings.push(Finding {
+            system_id: Some(system_id),
+            rule: rule_id,
+            title: format!(
+                "{} – {name}",
+                rule(rule_id).map(|r| r.title).unwrap_or(rule_id)
+            ),
+            detail,
+            path: None,
+            sid: Some(sid),
+            affected: 1,
+        });
+    }
+
+    // --- Dateiebene ---
+    for r in tx
+        .query(
+            "SELECT system_id, COUNT(*), (array_agg(path ORDER BY path))[1:5] FROM files GROUP BY system_id",
+            &[],
+        )
+        .await?
+    {
+        let (system_id, n, examples): (i64, i64, Vec<String>) = (r.get(0), r.get(1), r.get(2));
+        findings.push(Finding {
+            system_id: Some(system_id),
+            rule: "FILE_EXPLICIT",
+            title: format!("{n} Dateien mit eigenen Berechtigungen"),
+            detail: format!("z. B.:\n{}", examples.join("\n")),
+            path: examples.first().cloned(),
+            sid: None,
+            affected: n,
+        });
+    }
+
     // --- Freigaben ---
     {
         let shares: Vec<(i64, i64, String, String, bool)> = tx
@@ -713,6 +854,7 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
                 affected: disabled_in_groups,
             });
         }
+        ad_account_checks(&dir, cfg, &mut findings, &mut push_ad);
     }
 
     // --- Speichern ---
@@ -887,6 +1029,182 @@ async fn record_history(tx: &Transaction<'_>) -> Result<Vec<GradeChange>> {
         }
     }
     Ok(changes)
+}
+
+/// Administrative Gruppen der Domäne (soweit im AD vorhanden).
+pub fn privileged_groups(dir: &Directory) -> Vec<String> {
+    let mut out: Vec<String> = [
+        "S-1-5-32-544",
+        "S-1-5-32-548",
+        "S-1-5-32-549",
+        "S-1-5-32-550",
+        "S-1-5-32-551",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Some(ds) = &dir.domain_sid {
+        for rid in [512, 518, 519, 520] {
+            out.push(format!("{ds}-{rid}"));
+        }
+    }
+    out.retain(|g| dir.groups.contains_key(g));
+    out
+}
+
+/// Prüfungen an Konten: privilegierte Gruppen, SPNs, Kennwörter, Computerkonten.
+fn ad_account_checks(
+    dir: &Directory,
+    cfg: &AnalysisConfig,
+    findings: &mut Vec<Finding>,
+    push_ad: &mut impl FnMut(Finding, &mut Vec<Finding>),
+) {
+    let is_user = |sid: &str| dir.users.get(sid).is_some_and(|u| !u.is_computer);
+    // Benutzer → privilegierte Gruppen
+    let mut privileged: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for g in privileged_groups(dir) {
+        let members: Vec<String> = dir
+            .transitive_user_members(&g)
+            .into_iter()
+            .filter(|u| is_user(u))
+            .collect();
+        let active = members
+            .iter()
+            .filter(|u| {
+                dir.users
+                    .get(*u)
+                    .is_some_and(|x| x.enabled && !dir.is_inactive(x))
+            })
+            .count();
+        if active > cfg.privileged_max_members {
+            push_ad(
+                Finding {
+                    system_id: None,
+                    rule: "AD_PRIVILEGED_MANY",
+                    title: format!("{} aktive Konten in {}", active, dir.view(&g).name),
+                    detail: format!(
+                        "Grenze: {} (analysis.privileged_max_members)",
+                        cfg.privileged_max_members
+                    ),
+                    path: None,
+                    sid: Some(g.clone()),
+                    affected: active as i64,
+                },
+                findings,
+            );
+        }
+        for u in members {
+            privileged.entry(u).or_default().push(dir.view(&g).name);
+        }
+    }
+    for (sid, groups) in &privileged {
+        let Some(u) = dir.users.get(sid) else {
+            continue;
+        };
+        let state = if !u.enabled {
+            "deaktiviert"
+        } else if dir.is_inactive(u) {
+            "inaktiv"
+        } else {
+            continue;
+        };
+        push_ad(
+            Finding {
+                system_id: None,
+                rule: "AD_PRIVILEGED_STALE",
+                title: format!("Privilegiertes Konto {state}: {}", dir.view(sid).name),
+                detail: format!("Mitglied in: {}", groups.join(", ")),
+                path: None,
+                sid: Some(sid.clone()),
+                affected: groups.len() as i64,
+            },
+            findings,
+        );
+    }
+
+    let max_age = Utc::now() - Duration::days(cfg.password_max_age_days);
+    let mut users: Vec<_> = dir.users.iter().filter(|(_, u)| u.enabled).collect();
+    users.sort_by(|a, b| a.1.sam.cmp(&b.1.sam));
+    let mut stale_computers = Vec::new();
+    for (sid, u) in users {
+        if u.is_computer {
+            if dir.is_inactive(u) {
+                stale_computers.push(u.sam.trim_end_matches('$').to_string());
+            }
+            continue;
+        }
+        let name = dir.view(sid).name;
+        if !u.spns.is_empty() && rid(sid) != Some(502) {
+            let extra = privileged
+                .get(sid)
+                .map(|g| format!("\nZusätzlich privilegiert: {}", g.join(", ")))
+                .unwrap_or_default();
+            push_ad(
+                Finding {
+                    system_id: None,
+                    rule: "AD_KERBEROASTABLE",
+                    title: format!("SPN an Benutzerkonto {name}"),
+                    detail: format!("SPNs: {}{extra}", u.spns.join(", ")),
+                    path: None,
+                    sid: Some(sid.clone()),
+                    affected: 1,
+                },
+                findings,
+            );
+        }
+        if u.pwd_never_expires {
+            push_ad(
+                Finding {
+                    system_id: None,
+                    rule: "AD_PWD_NEVER_EXPIRES",
+                    title: format!("Kennwort läuft nie ab: {name}"),
+                    detail: match u.pwd_last_set {
+                        Some(t) => format!("Kennwort zuletzt gesetzt {}", t.format("%d.%m.%Y")),
+                        None => "Kennwort nie gesetzt".into(),
+                    },
+                    path: None,
+                    sid: Some(sid.clone()),
+                    affected: 1,
+                },
+                findings,
+            );
+        } else if let Some(t) = u.pwd_last_set.filter(|t| *t < max_age) {
+            push_ad(
+                Finding {
+                    system_id: None,
+                    rule: "AD_OLD_PASSWORD",
+                    title: format!(
+                        "Kennwort seit {} Tagen unverändert: {name}",
+                        (Utc::now() - t).num_days()
+                    ),
+                    detail: format!("Zuletzt gesetzt {}", t.format("%d.%m.%Y")),
+                    path: None,
+                    sid: Some(sid.clone()),
+                    affected: 1,
+                },
+                findings,
+            );
+        }
+    }
+    if !stale_computers.is_empty() {
+        findings.push(Finding {
+            system_id: None,
+            rule: "AD_STALE_COMPUTER",
+            title: format!("{} verwaiste Computerkonten", stale_computers.len()),
+            detail: format!(
+                "z. B.:\n{}",
+                stale_computers
+                    .iter()
+                    .take(5)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            path: None,
+            sid: None,
+            affected: stale_computers.len() as i64,
+        });
+    }
 }
 
 /// Stabile Kennung eines Befunds über Analyseläufe hinweg (für den Audit-Assist).
