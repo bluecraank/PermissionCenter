@@ -7,6 +7,9 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+### Hinzugefügt
+- `pc-server publish-client --server <url> --token <token>`: Client-Release lokal signieren und per API auf einen entfernten Server hochladen
+
 ### Behoben
 - `Install-PcClient.ps1` brach unter Windows PowerShell 5.1 mit `NativeCommandError` ab, sobald der Client Logzeilen auf stderr schrieb
 

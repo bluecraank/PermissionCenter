@@ -79,6 +79,12 @@ enum Command {
         signing_key: Option<PathBuf>,
         #[arg(long)]
         notes: Option<String>,
+        /// Statt lokal ablegen: an diesen PermissionCenter-Server hochladen (z. B. http://permcenter:8080)
+        #[arg(long)]
+        server: Option<String>,
+        /// API-Token für den Upload (ein Wert aus PC_API_TOKENS des Zielservers)
+        #[arg(long, env = "PC_API_TOKEN")]
+        token: Option<String>,
     },
     /// Prüft, ob der lokale Server antwortet (für Docker-Healthchecks)
     Healthcheck {
@@ -132,6 +138,8 @@ async fn run(cli: Cli) -> Result<()> {
             version,
             signing_key,
             notes,
+            server,
+            token,
         }) => {
             let exe =
                 std::fs::read(file).with_context(|| format!("{} nicht lesbar", file.display()))?;
@@ -147,6 +155,29 @@ async fn run(cli: Cli) -> Result<()> {
                 }
                 None => None,
             };
+            if let Some(base) = server {
+                let r = upload_release(
+                    base,
+                    token.as_deref(),
+                    version,
+                    exe,
+                    signature,
+                    notes.clone(),
+                )
+                .await?;
+                println!(
+                    "Release {} auf {} veröffentlicht ({} Byte, {})",
+                    r.version,
+                    base,
+                    r.size,
+                    if r.signature.is_some() {
+                        "signiert"
+                    } else {
+                        "UNSIGNIERT"
+                    }
+                );
+                return Ok(());
+            }
             let r = releases::publish(
                 &cfg.client_releases_dir,
                 version,
@@ -271,6 +302,48 @@ async fn serve(state: AppState) -> Result<()> {
         .await?;
     info!("Server beendet");
     Ok(())
+}
+
+/// Lädt ein lokal signiertes Release per API auf einen entfernten Server hoch.
+async fn upload_release(
+    base: &str,
+    token: Option<&str>,
+    version: &str,
+    exe: Vec<u8>,
+    signature: Option<String>,
+    notes: Option<String>,
+) -> Result<pc_common::release::ClientRelease> {
+    let token = token
+        .context("--token (oder PC_API_TOKEN) fehlt – der Server erlaubt Uploads nur mit Token")?;
+    let url = format!("{}/api/v1/client/releases", base.trim_end_matches('/'));
+    let (token, version) = (token.to_string(), version.to_string());
+    tokio::task::spawn_blocking(move || -> Result<pc_common::release::ClientRelease> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(300)))
+            .http_status_as_error(false)
+            .build()
+            .into();
+        let mut req = agent
+            .post(&url)
+            .query("version", &version)
+            .header("X-Api-Key", &token);
+        if let Some(s) = &signature {
+            req = req.query("signature", s);
+        }
+        if let Some(n) = &notes {
+            req = req.query("notes", n);
+        }
+        let mut resp = req
+            .header("Content-Type", "application/octet-stream")
+            .send(&exe[..])
+            .with_context(|| format!("{url} nicht erreichbar"))?;
+        if !resp.status().is_success() {
+            let body = resp.body_mut().read_to_string().unwrap_or_default();
+            anyhow::bail!("Server antwortete mit {}: {}", resp.status(), body.trim());
+        }
+        Ok(resp.body_mut().read_json()?)
+    })
+    .await?
 }
 
 /// Minimaler HTTP-Aufruf von `/api/v1/health` ohne zusätzliche Abhängigkeiten.

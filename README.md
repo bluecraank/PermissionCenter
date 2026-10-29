@@ -97,14 +97,17 @@ Beide Programme nutzen TOML-Dateien: `schlüssel = wert`, Abschnitte und Komment
    pc-server gen-signing-key --out permcenter-signing.key
    ```
 2. Den öffentlichen Schlüssel beim Server (`PC_CLIENT_UPDATE_PUBLIC_KEY`) und in den Clients (`[update] public_key`, Installationsparameter `-PublicKey`) eintragen.
-3. Eine neue Version signiert veröffentlichen:
-   ```bash
-   pc-server publish-client --file pc-client.exe --version 0.2.0 --signing-key permcenter-signing.key --notes "…"
-   # in Docker:
-   docker compose cp pc-client.exe server:/tmp/pc-client.exe
-   docker compose exec server pc-server publish-client --file /tmp/pc-client.exe --version 0.2.0 --signing-key …
+3. Eine neue Version bauen, lokal signieren und auf den Server hochladen (der private Schlüssel verlässt deinen Rechner nicht):
+   ```powershell
+   # Version in Cargo.toml ([workspace.package] version) erhöhen, CHANGELOG pflegen
+   cargo build --release -p pc-client -p pc-server
+   .\target\release\pc-server.exe publish-client `
+       --file .\target\release\pc-client.exe --version 0.2.0 `
+       --signing-key C:\Sicher\permcenter-signing.key `
+       --server http://permcenter:8080 --token <ein Wert aus PC_API_TOKENS> --notes "…"
    ```
-   Alternativ per API: `POST /api/v1/client/releases?version=0.2.0&signature=…` mit `X-Api-Key`.
+   Ohne `--server` legt `publish-client` das Release im lokalen `client_releases_dir` ab (z. B. direkt auf dem Server).
+   Rohe API: `POST /api/v1/client/releases?version=0.2.0&signature=…` mit `X-Api-Key` und der EXE als Body.
 
 Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ein Update installiert wird, müssen **Größe, SHA-256 und Ed25519-Signatur** stimmen; die Signatur deckt Version und Inhalt gemeinsam ab, ein Downgrade mit einer alten Signatur ist also nicht möglich. Danach tauscht der Client seine EXE aus und startet neu. Der Dienst beendet sich dazu mit Code 10, die Dienst-Wiederherstellung startet ihn wieder. Ohne `public_key` verweigert der Client Updates, solange `require_signature = true` gilt (Standard).
 

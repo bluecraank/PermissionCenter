@@ -161,12 +161,16 @@ fn main() {
     logging::log_startup(cmd_name);
     match &cfg_path {
         Some(p) => info!(target: logging::RUN_TARGET, "Konfiguration: {}", p.display()),
-        None => info!(target: logging::RUN_TARGET, "Keine Konfigurationsdatei gefunden – Standardwerte aktiv"),
+        None => {
+            info!(target: logging::RUN_TARGET, "Keine Konfigurationsdatei gefunden – Standardwerte aktiv")
+        }
     }
     let started = std::time::Instant::now();
     let result = run(cli, cfg, cfg_path);
     match &result {
-        Ok(()) => info!(target: logging::RUN_TARGET, "Beendet nach {:.1}s", started.elapsed().as_secs_f64()),
+        Ok(()) => {
+            info!(target: logging::RUN_TARGET, "Beendet nach {:.1}s", started.elapsed().as_secs_f64())
+        }
         // `{:#}` gibt die vollständige Ursachenkette aus
         Err(e) => error!(
             "Abgebrochen nach {:.1}s: {e:#}",
