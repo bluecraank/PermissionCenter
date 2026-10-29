@@ -36,7 +36,7 @@ services:
 
   server:
     build: .
-    image: permissioncenter/server:0.1.0
+    image: permissioncenter/server:0.2.0
     restart: unless-stopped
     depends_on:
       db:
