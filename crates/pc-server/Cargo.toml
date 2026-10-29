@@ -32,4 +32,5 @@ tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_j
 deadpool-postgres = "0.14"
 futures-util = "0.3"
 getrandom = "0.3"
+ureq = { version = "3", features = ["json"] }
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring", "sync"] }

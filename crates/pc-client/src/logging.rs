@@ -33,28 +33,28 @@ pub fn init(cfg: &LoggingConfig, console: bool, verbose: bool) -> LogGuard {
     } else {
         "info".to_string()
     };
-    let console_layer = console.then(|| {
-        tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            // Eigener Feldformatierer: sonst landen ANSI-Farbcodes der Konsole
-            // über den gemeinsamen Span-Cache auch in der Logdatei.
-            .fmt_fields(
-                tracing_subscriber::fmt::format::debug_fn(|w, field, value| {
-                    if field.name() == "message" {
-                        write!(w, "{value:?}")
-                    } else {
-                        write!(w, "{field}={value:?}")
-                    }
-                })
-                .delimited(" "),
-            )
-            .with_target(false)
-            .with_timer(timer.clone())
-            .with_filter(
-                EnvFilter::try_from_env("PC_LOG")
-                    .unwrap_or_else(|_| EnvFilter::new(format!("{console_filter},{RUN_TARGET}=warn"))),
-            )
-    });
+    let console_layer =
+        console.then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                // Eigener Feldformatierer: sonst landen ANSI-Farbcodes der Konsole
+                // über den gemeinsamen Span-Cache auch in der Logdatei.
+                .fmt_fields(
+                    tracing_subscriber::fmt::format::debug_fn(|w, field, value| {
+                        if field.name() == "message" {
+                            write!(w, "{value:?}")
+                        } else {
+                            write!(w, "{field}={value:?}")
+                        }
+                    })
+                    .delimited(" "),
+                )
+                .with_target(false)
+                .with_timer(timer.clone())
+                .with_filter(EnvFilter::try_from_env("PC_LOG").unwrap_or_else(|_| {
+                    EnvFilter::new(format!("{console_filter},{RUN_TARGET}=warn"))
+                }))
+        });
 
     let dir = cfg.dir();
     let mut file_err = None;
