@@ -56,6 +56,10 @@ pub struct ScanConfig {
     pub report_mode: ReportMode,
     /// Ebenen, die im Modus `relevant` immer gemeldet werden (Gerüst des Baums).
     pub skeleton_depth: u32,
+    /// Unter diesen Pfaden auch Dateien mit eigenen Berechtigungen erfassen.
+    pub file_acl_paths: Vec<String>,
+    /// Anzahl der gleichzeitig gescannten Laufwerke bzw. Freigaben.
+    pub parallel_roots: usize,
 }
 
 /// Protokollierung in Datei (zusätzlich zur Konsole).
@@ -101,6 +105,8 @@ pub struct ServiceConfig {
     pub scan_on_start: bool,
     /// Abstand der Update-Prüfung in Minuten (0 = nur vor Scans).
     pub update_check_minutes: u64,
+    /// Abstand in Minuten, in dem nach „Jetzt scannen“-Aufträgen gefragt wird (0 = aus).
+    pub task_poll_minutes: u64,
 }
 
 impl Default for ServiceConfig {
@@ -110,6 +116,7 @@ impl Default for ServiceConfig {
             interval_hours: None,
             scan_on_start: false,
             update_check_minutes: 60,
+            task_poll_minutes: 5,
         }
     }
 }
@@ -182,6 +189,8 @@ impl Default for ScanConfig {
             max_depth: None,
             report_mode: ReportMode::Relevant,
             skeleton_depth: 2,
+            file_acl_paths: Vec::new(),
+            parallel_roots: 2,
         }
     }
 }

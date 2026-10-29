@@ -33,7 +33,7 @@ rid = 1100
 users, groups = [], []
 
 
-def user(sam, name, enabled=True, days_ago=3, created_days=900):
+def user(sam, name, enabled=True, days_ago=3, created_days=900, pwd_days=60, never_expires=False, spns=()):
     global rid
     rid += 1
     u = {
@@ -46,10 +46,28 @@ def user(sam, name, enabled=True, days_ago=3, created_days=900):
         "last_logon": iso(NOW - timedelta(days=days_ago)) if days_ago is not None else None,
         "created": iso(NOW - timedelta(days=created_days)),
         "is_computer": False,
+        "password_last_set": iso(NOW - timedelta(days=pwd_days)),
+        "password_never_expires": never_expires,
+        "service_principal_names": list(spns),
         "member_of": [f"{DOM}-513"],
     }
     users.append(u)
     return u
+
+
+def computer(name, days_ago):
+    global rid
+    rid += 1
+    users.append({
+        "sid": f"{DOM}-{rid}",
+        "sam_account_name": f"{name}$",
+        "distinguished_name": f"CN={name},OU=Computer,DC=demo,DC=local",
+        "enabled": True,
+        "last_logon": iso(NOW - timedelta(days=days_ago)),
+        "created": iso(NOW - timedelta(days=1500)),
+        "is_computer": True,
+        "member_of": [f"{DOM}-515"],
+    })
 
 
 def group(sam, desc, scope="global", members=()):
@@ -77,6 +95,13 @@ eva = user("e.hoffmann", "Eva Hoffmann")
 felix = user("f.koch", "Felix Koch", enabled=False, days_ago=500)
 gina = user("g.richter", "Gina Richter", days_ago=None, created_days=300)  # nie angemeldet
 admin = user("adm.it", "IT Administrator")
+svc_sql = user("svc.sql", "SQL-Dienstkonto", pwd_days=1500, never_expires=True,
+               spns=["MSSQLSvc/sql01.demo.local:1433"])  # Kerberoasting + Kennwort läuft nie ab
+olaf = user("o.alt", "Olaf Alt", pwd_days=700)  # Kennwort sehr alt
+computer("FS01", 0)
+computer("FS02", 1)
+computer("PC-ALT-07", 250)  # verwaist
+computer("NB-LAGER-02", 400)  # verwaist
 
 g_vertrieb = group("GG_Vertrieb", "Mitarbeiter Vertrieb", members=[anna, ben, clara])
 g_technik = group("GG_Technik", "Mitarbeiter Technik", members=[eva, dirk])
@@ -92,7 +117,7 @@ dl_projekte = group("DL_FS02_Projekte_RW", "Projekte", "domain_local", [g_techni
 groups.append({"sid": f"{DOM}-513", "sam_account_name": "Domänen-Benutzer", "scope": "global", "is_security": True,
                "members": [], "description": "Alle Domänenbenutzer"})
 groups.append({"sid": f"{DOM}-512", "sam_account_name": "Domänen-Admins", "scope": "global", "is_security": True,
-               "members": [admin["sid"]]})
+               "members": [admin["sid"], dirk["sid"]]})  # deaktiviertes Konto in Domänen-Admins
 
 ad = {"domain": "demo.local", "domain_sid": DOM, "collected_at": iso(NOW), "users": users, "groups": groups}
 (OUT / "ad-demo.json").write_text(json.dumps(ad, ensure_ascii=False, indent=1), encoding="utf-8")

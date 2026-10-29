@@ -81,6 +81,46 @@ Mapping Anforderung → Umsetzung → Test: [ANFORDERUNGEN.md](ANFORDERUNGEN.md)
 
 **Nicht verifiziert:** AD-Skripte (`Remove-ADGroup` usw.), Freigabe-Skripte (`*-SmbShareAccess`) und die Übertragung auf Gruppen (`-Group`) nur per Parser geprüft, nicht ausgeführt. Grund: kein AD bzw. keine Adminrechte auf dem Testrechner.
 
+## 2026-10-29 – Ausbau (Unreleased)
+
+**Auftrag:** Alle Ideen umsetzen außer SharePoint/OneDrive, Rezertifizierung und AD-Login mit Rollen.
+
+**Umgesetzt**
+1. Änderungsverlauf und Bewertungstrend
+2. Benachrichtigungen (SMTP, Teams, Slack, JSON) mit Wochenbericht
+3. CSV-Exporte und Druckberichte (Audit, Zugriffsbericht)
+4. Zugriffsprüfung und Dateneigentümer
+5. Sechs AD-Prüfungen (privilegierte Gruppen, Kerberoasting, Kennwörter, Computerkonten)
+6. Lokale Administratoren und Dateiebene im Client
+7. „Jetzt scannen“ und paralleler Scan
+8. GitHub-Actions für CI und Release
+
+**Entscheidungen**
+- *PDF:* über die Druckfunktion des Browsers mit eigenem A4-Layout statt serverseitiger PDF-Erzeugung (keine zusätzliche Abhängigkeit, Diagramme bleiben scharf).
+- *Excel:* CSV mit UTF-8-BOM und Semikolon – öffnet sich in deutschem Excel direkt korrekt.
+- *„Dienstkonten mit interaktiver Anmeldung“* ist aus AD-Daten nicht zuverlässig erkennbar; stattdessen die aussagekräftigere Prüfung **Kerberoasting** (SPN an Benutzerkonto).
+- *Änderungsvergleich* nur innerhalb gemeinsamer Scan-Wurzeln, damit `pc-client scan --path …` keine Scheinänderungen erzeugt.
+- *Benachrichtigung* bei der allerersten Analyse unterdrückt (sonst wäre alles „neu“).
+- *Release-Signatur:* `publish-client --signature`, damit ein in CI signiertes Release ohne privaten Schlüssel auf den internen Server kommt.
+
+**Tests (lokal, portables PostgreSQL)**
+- Änderungen: geänderter Demo-Report → hinzugefügter ACE, entfernter ACE, unterbrochene Vererbung, geänderter Besitzer erkannt; Teil-Scan erzeugt keine Scheinänderungen (Unit-Test).
+- Benachrichtigungen: Test-Empfänger für SMTP und Webhooks – E-Mail (Text + HTML), Teams-Adaptive-Card und Slack-Text für neuen Befund, Testnachricht und Wochenbericht empfangen.
+- Exporte: alle sechs CSV-Endpunkte; Zugriffsprüfung über lokalen Pfad und UNC, Auflösung verschachtelter Gruppen; Dateneigentümer mit Vererbung auf Unterordner.
+- AD: fünf der sechs neuen AD-Regeln mit erweiterten Demodaten ausgelöst (`AD_PRIVILEGED_MANY` nicht, die Demo liegt unter der Grenze).
+- Client: echter Scan zweier Pfade parallel (IDs korrekt zusammengeführt), Dateiebene (Datei mit verwaister SID und unterbrochener Vererbung erkannt), lokale Administratoren gemeldet (RID 500 korrekt ausgenommen).
+- Audit-Assist: 24 Skripttypen fehlerfrei mit dem PowerShell-5.1-Parser; `FILE_EXPLICIT` real angewendet und nach erneutem Scan behoben; `LOCAL_ADMIN_USER` nur als Probelauf (sonst hätte es das eigene Konto entfernt).
+- „Jetzt scannen“: Auftrag anlegen, Abholung mit Token (ohne Token 401), zweite Abfrage leer, Upload löscht den Auftrag.
+- CI-Signatur: Release mit `--signing-key` lokal signiert, mit `--signature` auf den Testserver hochgeladen; falsche Signatur abgelehnt.
+- Oberfläche: Dashboard mit Trend, Zugriffsprüfung, Änderungen, Audit-Bericht in Edge headless geprüft.
+
+**Nicht verifiziert**
+- Dienstschleife mit Auftragsabfrage (Dienstinstallation in dieser Umgebung nicht erlaubt; Abfrage-Endpunkt und Client-Funktion getestet).
+- Echte SMTP-Server mit STARTTLS/TLS und echte Teams-/Slack-Webhooks (nur mit lokalem Test-Empfänger).
+- LDAP-Abgleich der neuen Attribute (`servicePrincipalName`, `userAccountControl`-Flag) gegen ein echtes AD; `Export-ADData.ps1` nicht auf einem DC ausgeführt.
+- GitHub-Actions-Workflows (YAML geprüft, Ablauf lokal nachgestellt, aber nicht auf GitHub gelaufen).
+- AD-Skripte des Audit-Assist (nur Parser).
+
 ### Ideen für nächste Versionen
 - Login über AD aktivieren (vorbereitet), Rollen (Leser/Admin).
 - Veränderungsverlauf zwischen Scans (Diff der Berechtigungen).

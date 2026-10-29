@@ -162,6 +162,24 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
             .await?;
         tx.execute("DELETE FROM shares WHERE system_id = $1", &[&system_id])
             .await?;
+        tx.execute("DELETE FROM file_aces WHERE system_id = $1", &[&system_id])
+            .await?;
+        // Abgeholter „Jetzt scannen“-Auftrag ist damit erledigt
+        tx.execute(
+            "DELETE FROM scan_requests WHERE system_id = $1 AND picked_at IS NOT NULL",
+            &[&system_id],
+        )
+        .await?;
+        tx.execute("DELETE FROM files WHERE system_id = $1", &[&system_id])
+            .await?;
+        // Ältere Clients melden keine lokalen Administratoren – dann alten Stand behalten
+        if r.local_admins.is_some() {
+            tx.execute(
+                "DELETE FROM local_admins WHERE system_id = $1",
+                &[&system_id],
+            )
+            .await?;
+        }
 
         let root_ids: HashSet<u64> = r.roots.iter().filter_map(|x| x.folder_id).collect();
         let mut folder_rows: Vec<Vec<Box<dyn ToSql + Sync + Send>>> =
@@ -251,6 +269,66 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
                 )
                 .await?;
             }
+        }
+
+        // Lokale Administratoren
+        for p in r.local_admins.iter().flatten() {
+            tx.execute(
+                "INSERT INTO local_admins (system_id, sid, name, kind) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT DO NOTHING",
+                &[&system_id, &p.sid, &p.display_name(), &p.kind.as_str()],
+            )
+            .await?;
+        }
+
+        // Dateien mit eigenen Berechtigungen
+        if !r.files.is_empty() {
+            let folder_paths: std::collections::HashMap<u64, &str> =
+                r.folders.iter().map(|f| (f.id, f.path.as_str())).collect();
+            let mut file_rows: Vec<Vec<Box<dyn ToSql + Sync + Send>>> = Vec::new();
+            let mut file_ace_rows: Vec<Vec<Box<dyn ToSql + Sync + Send>>> = Vec::new();
+            for (i, f) in r.files.iter().enumerate() {
+                let file_id = i as i64 + 1;
+                let parent = folder_paths.get(&f.folder_id).copied().unwrap_or("");
+                let path = if parent.ends_with('\\') {
+                    format!("{parent}{}", f.name)
+                } else {
+                    format!("{parent}\\{}", f.name)
+                };
+                file_rows.push(vec![
+                    Box::new(system_id),
+                    Box::new(file_id),
+                    Box::new(f.folder_id as i64),
+                    Box::new(path),
+                    Box::new(f.owner_sid.clone()),
+                    Box::new(f.inheritance_protected),
+                ]);
+                for a in &f.aces {
+                    file_ace_rows.push(vec![
+                        Box::new(system_id),
+                        Box::new(file_id),
+                        Box::new(a.sid.clone()),
+                        Box::new(a.ace_type.as_str().to_string()),
+                        Box::new(a.mask as i64),
+                        Box::new(a.rights.as_str().to_string()),
+                        Box::new(a.inherited),
+                    ]);
+                }
+            }
+            copy_rows(
+                tx,
+                "COPY files (system_id, file_id, folder_local_id, path, owner_sid, protected) FROM STDIN BINARY",
+                &[Type::INT8, Type::INT8, Type::INT8, Type::TEXT, Type::TEXT, Type::BOOL],
+                file_rows,
+            )
+            .await?;
+            copy_rows(
+                tx,
+                "COPY file_aces (system_id, file_id, sid, ace_type, mask, rights, inherited) FROM STDIN BINARY",
+                &[Type::INT8, Type::INT8, Type::TEXT, Type::TEXT, Type::INT8, Type::TEXT, Type::BOOL],
+                file_ace_rows,
+            )
+            .await?;
         }
 
         if let Some(before) = before {

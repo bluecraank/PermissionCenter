@@ -80,6 +80,13 @@ report_mode = "relevant"
 # Diese oberen Ebenen werden immer übertragen (Gerüst für den Verzeichnisbaum)
 skeleton_depth = 2
 
+# Dateiebene: unter diesen Pfaden auch einzelne Dateien mit eigenen Berechtigungen
+# erfassen, z. B. ['D:\Daten\Personal']. Kostet Zeit – nur gezielt einsetzen.
+file_acl_paths = []
+
+# Anzahl der Laufwerke bzw. Freigaben, die gleichzeitig gescannt werden
+parallel_roots = 2
+
 
 [storage]
 # Lokale Datenbank (auskommentiert = %ProgramData%\PermissionCenter\pc-client.db)
@@ -127,3 +134,7 @@ scan_on_start = false
 
 # Abstand der Update-Prüfung in Minuten (0 = nur vor Scans)
 update_check_minutes = 60
+
+# Abstand in Minuten, in dem der Dienst nach „Jetzt scannen“-Aufträgen
+# aus der Weboberfläche fragt (0 = aus)
+task_poll_minutes = 5

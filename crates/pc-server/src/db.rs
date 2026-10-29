@@ -162,6 +162,8 @@ CREATE INDEX IF NOT EXISTS idx_findings_system ON findings(system_id);
 CREATE INDEX IF NOT EXISTS idx_findings_rule ON findings(rule);
 CREATE INDEX IF NOT EXISTS idx_findings_sid ON findings(sid);
 ALTER TABLE findings ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+ALTER TABLE ad_users ADD COLUMN IF NOT EXISTS pwd_never_expires BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ad_users ADD COLUMN IF NOT EXISTS spns TEXT[];
 CREATE INDEX IF NOT EXISTS idx_findings_fingerprint ON findings(fingerprint);
 
 -- Audit-Assist: Bearbeitungsstand je Befund (überdauert die Neuberechnung der Befunde)

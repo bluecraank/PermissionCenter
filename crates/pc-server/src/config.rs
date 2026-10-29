@@ -151,6 +151,10 @@ pub struct AnalysisConfig {
     pub deep_explicit_depth: i64,
     /// Maximale Anzahl Einzelbefunde je Regel und System.
     pub max_findings_per_rule: usize,
+    /// Kennwörter älter als so viele Tage gelten als veraltet.
+    pub password_max_age_days: i64,
+    /// Mehr aktive Mitglieder in einer privilegierten Gruppe (z. B. Domänen-Admins) sind ein Befund.
+    pub privileged_max_members: usize,
 }
 
 impl Default for ServerConfig {
@@ -192,6 +196,8 @@ impl Default for AnalysisConfig {
             stale_scan_days: 7,
             deep_explicit_depth: 6,
             max_findings_per_rule: 500,
+            password_max_age_days: 365,
+            privileged_max_members: 5,
         }
     }
 }

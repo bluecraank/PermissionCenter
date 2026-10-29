@@ -1,0 +1,110 @@
+# Release bei einem Tag v<Version>, z. B. v0.2.0 (muss zu Cargo.toml passen):
+#   - pc-client.exe bauen und mit dem Secret PC_SIGNING_KEY signieren (Inhalt der Datei aus
+#     „pc-server gen-signing-key“). Ohne Secret entsteht ein unsigniertes Release.
+#   - ZIP mit Client, Installationsskript, Beispielkonfiguration und release.json als GitHub-Release
+#   - Server-Image nach ghcr.io/<owner>/permissioncenter-server:<version> und :latest
+#
+# Den signierten Client anschließend auf dem eigenen Server veröffentlichen (ohne privaten Schlüssel):
+#   pc-server publish-client --file pc-client.exe --version <v> --signature <signature aus release.json> \
+#     --server http://permcenter:8080 --token <API-Token>
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  client:
+    name: Client-Release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version prüfen
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'.TrimStart('v')
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          if ($tag -ne $cargo) { throw "Tag $tag passt nicht zur Version $cargo in Cargo.toml" }
+          "VERSION=$tag" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Web-Oberfläche bauen
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bauen
+        run: cargo build --release --locked -p pc-client -p pc-server
+
+      - name: Signieren und packen
+        shell: pwsh
+        env:
+          PC_SIGNING_KEY: ${{ secrets.PC_SIGNING_KEY }}
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/pc-client.exe dist/
+          Copy-Item tools/Install-PcClient.ps1 dist/
+          Copy-Item crates/pc-client/src/config_template.toml dist/pc-client.example.toml
+          if ($env:PC_SIGNING_KEY) {
+            $key = Join-Path $env:RUNNER_TEMP 'signing.key'
+            Set-Content -Path $key -Value $env:PC_SIGNING_KEY -NoNewline
+            $env:PC_CLIENT_RELEASES_DIR = Join-Path $env:RUNNER_TEMP 'releases'
+            ./target/release/pc-server.exe publish-client --file dist/pc-client.exe --version $env:VERSION `
+              --signing-key $key --notes "Release ${{ github.ref_name }}"
+            Remove-Item $key
+            Copy-Item (Join-Path $env:PC_CLIENT_RELEASES_DIR "$env:VERSION/release.json") dist/
+            $sig = (Get-Content dist/release.json -Raw | ConvertFrom-Json).signature
+            "### Signatur`n`n``$sig``" >> $env:GITHUB_STEP_SUMMARY
+          } else {
+            Write-Warning 'Secret PC_SIGNING_KEY fehlt – das Release ist unsigniert.'
+          }
+          Compress-Archive -Path dist/* -DestinationPath "pc-client-$env:VERSION.zip"
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            pc-client-*.zip
+            dist/release.json
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+
+  server-image:
+    name: Server-Image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/permissioncenter-server
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

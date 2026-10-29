@@ -1,0 +1,65 @@
+# Prüft jeden Push und Pull Request: Formatierung, Tests, Client-Build, Web-Oberfläche und Docker-Image.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust-und-web:
+    name: Rust + Web (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Web-Oberfläche prüfen und bauen
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run lint
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Formatierung
+        run: cargo fmt --all --check
+
+      - name: Tests
+        run: cargo test --workspace --locked
+
+      - name: Client (Release) bauen
+        run: cargo build --release --locked -p pc-client
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pc-client-${{ github.sha }}
+          path: target/release/pc-client.exe
+          retention-days: 14
+
+  docker:
+    name: Docker-Image (Server)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
