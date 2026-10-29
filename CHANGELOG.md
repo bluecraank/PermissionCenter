@@ -7,6 +7,12 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+### Behoben
+- `Install-PcClient.ps1` brach unter Windows PowerShell 5.1 mit `NativeCommandError` ab, sobald der Client Logzeilen auf stderr schrieb
+
+### Geändert
+- Verwaltungszeilen eines Client-Laufs (Start, Konfiguration, Dauer) erscheinen nur noch in der Logdatei, nicht mehr auf der Konsole
+
 ## [0.1.0] - 2026-10-29
 
 ### Hinzugefügt
