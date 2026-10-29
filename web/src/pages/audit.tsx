@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, ListChecks, Printer, RefreshCw, XCircle } from 'lucide-react'
+import { CheckCircle2, Download, FileText, ListChecks, RefreshCw, XCircle } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -39,8 +39,15 @@ export default function AuditPage() {
         description={`Bewertung der Systeme anhand von ${data.checks.length} Prüfregeln · Stand ${dateTime(data.analysis_at)}`}
         actions={
           <>
-            <Button variant="outline" size="sm" onClick={() => window.print()}>
-              <Printer className="size-4" /> Drucken
+            <Button variant="outline" size="sm" asChild>
+              <Link to="/report/audit">
+                <FileText className="size-4" /> Bericht / PDF
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href="/api/v1/export/audit.csv">
+                <Download className="size-4" /> CSV
+              </a>
             </Button>
             <Button variant="outline" size="sm" onClick={() => run.mutate()} disabled={run.isPending}>
               <RefreshCw className={cn('size-4', run.isPending && 'animate-spin')} /> Neu bewerten

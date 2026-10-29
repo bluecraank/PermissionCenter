@@ -4,14 +4,20 @@
 //! Directory ab, bewertet sie und stellt Ergebnisse über REST-API und
 //! Web-Oberfläche bereit.
 
+mod access;
 mod ad;
 mod analysis;
 mod api;
 mod assist;
+mod changes;
 mod config;
 mod db;
 mod directory;
+mod export;
 mod ingest;
+mod insights;
+mod notify;
+mod owners;
 mod releases;
 mod web;
 
@@ -266,6 +272,15 @@ async fn run(cli: Cli) -> Result<()> {
     }
 }
 
+async fn periodic_analysis(st: &AppState) -> Result<()> {
+    let mut client = st.db.get().await?;
+    let tx = client.transaction().await?;
+    let a = analysis::run(&tx, &st.cfg.analysis).await?;
+    tx.commit().await?;
+    notify::after_analysis(st.clone(), a);
+    Ok(())
+}
+
 async fn serve(state: AppState) -> Result<()> {
     let cfg = state.cfg.clone();
     if cfg.api_tokens.is_empty() {
@@ -293,6 +308,26 @@ async fn serve(state: AppState) -> Result<()> {
         }
     }
 
+    // Stündliche Neubewertung (erkennt u. a. Systeme ohne aktuellen Scan) und Wochenbericht
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut minute = 0u64;
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                minute += 1;
+                if let Err(e) = notify::weekly_tick(&st).await {
+                    warn!("Wochenbericht fehlgeschlagen: {e:#}");
+                }
+                if minute.is_multiple_of(60) {
+                    if let Err(e) = periodic_analysis(&st).await {
+                        warn!("Periodische Analyse fehlgeschlagen: {e:#}");
+                    }
+                }
+            }
+        });
+    }
+
     // Periodischer AD-Abgleich
     if cfg.ldap.is_configured() && cfg.ldap.sync_interval_minutes > 0 {
         let st = state.clone();
@@ -309,7 +344,11 @@ async fn serve(state: AppState) -> Result<()> {
     }
 
     let app = Router::new()
-        .merge(api::router(state))
+        .merge(api::router(state.clone()))
+        .merge(insights::router(state.clone()))
+        .merge(export::router(state.clone()))
+        .merge(owners::router(state.clone()))
+        .merge(access::router(state))
         .fallback(web::static_handler)
         .layer(DefaultBodyLimit::max(cfg.max_upload_mb * 1024 * 1024))
         .layer(RequestDecompressionLayer::new())

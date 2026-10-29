@@ -1,6 +1,6 @@
 import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Search, X } from 'lucide-react'
+import { Download, Search, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { PageHeader } from '@/components/common'
 import { FindingsTable } from '@/components/findings-table'
-import { api, type SystemSummary } from '@/lib/api'
+import { api, qs, type SystemSummary } from '@/lib/api'
 import { SEVERITIES, severityLabel } from '@/lib/format'
 
 interface RuleDef {
@@ -41,7 +41,17 @@ export default function FindingsPage() {
 
   return (
     <>
-      <PageHeader title="Befunde" description="Alle erkannten Probleme in Dateisystemen und Active Directory" />
+      <PageHeader
+        title="Befunde"
+        description="Alle erkannten Probleme in Dateisystemen und Active Directory"
+        actions={
+          <Button variant="outline" asChild>
+            <a href={`/api/v1/export/findings.csv${qs(filter)}`}>
+              <Download className="size-4" /> CSV
+            </a>
+          </Button>
+        }
+      />
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative w-full sm:w-64">
           <Search className="text-muted-foreground absolute top-2.5 left-2.5 size-4" />

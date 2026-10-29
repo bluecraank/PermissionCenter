@@ -117,7 +117,7 @@ pub const RULES: &[Rule] = &[
         scope: "system",
         title: "System nicht aktuell gescannt",
         description: "Der letzte Scan des Systems ist älter als der konfigurierte Zeitraum.",
-        recommendation: "Geplante Aufgabe des Clients prüfen (Install-PcClientTask.ps1) und Erreichbarkeit des Servers sicherstellen.",
+        recommendation: "Dienst bzw. geplante Aufgabe des Clients prüfen (Install-PcClient.ps1) und Erreichbarkeit des Servers sicherstellen.",
     },
     Rule {
         id: "DIRECT_USER_ACE",
@@ -264,8 +264,34 @@ struct AceRow {
     rights: Rights,
 }
 
+/// Seit der letzten Analyse neu aufgetretener Befund.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewFinding {
+    pub rule: &'static str,
+    pub severity: Severity,
+    pub title: String,
+    pub system_id: Option<i64>,
+}
+
+/// Verschlechterung der Note eines Bereichs.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradeChange {
+    /// `total`, `infra`, `ad` oder `system`
+    pub scope: &'static str,
+    pub system_id: i64,
+    pub old_grade: String,
+    pub new_grade: String,
+    pub old_score: i32,
+    pub new_score: i32,
+}
+
+#[derive(Debug, Default)]
 pub struct AnalysisSummary {
     pub findings: usize,
+    pub new_findings: Vec<NewFinding>,
+    pub grade_changes: Vec<GradeChange>,
+    /// Erste Analyse überhaupt – alles wäre „neu“, daher keine Benachrichtigung.
+    pub initial: bool,
 }
 
 /// Berechnet alle Befunde neu (innerhalb der übergebenen Transaktion).
@@ -691,6 +717,16 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
 
     // --- Speichern ---
     let now = Utc::now();
+    let initial = crate::db::get_meta(tx, "analysis_at").await?.is_none();
+    let old_fps: HashSet<String> = tx
+        .query(
+            "SELECT fingerprint FROM findings WHERE fingerprint IS NOT NULL",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| r.get(0))
+        .collect();
     tx.execute("DELETE FROM findings", &[]).await?;
     {
         let sink = tx
@@ -750,9 +786,107 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
     )
     .await?;
     crate::db::set_meta(tx, "analysis_at", Some(&now.to_rfc3339())).await?;
+    let new_findings = findings
+        .iter()
+        .filter(|f| !old_fps.contains(&fingerprint(f)))
+        .map(|f| NewFinding {
+            rule: f.rule,
+            severity: rule(f.rule).map(|r| r.severity).unwrap_or(Severity::Info),
+            title: f.title.clone(),
+            system_id: f.system_id,
+        })
+        .collect();
+    let grade_changes = record_history(tx).await?;
     Ok(AnalysisSummary {
         findings: findings.len(),
+        new_findings,
+        grade_changes,
+        initial,
     })
+}
+
+/// Schreibt die Tageswerte der Bewertung (gesamt, Infrastruktur, AD, je System)
+/// und liefert alle Bereiche, deren Note sich verschlechtert hat.
+async fn record_history(tx: &Transaction<'_>) -> Result<Vec<GradeChange>> {
+    let rows = tx
+        .query(
+            "SELECT f.system_id, f.severity, f.affected FROM findings f
+             WHERE NOT EXISTS (SELECT 1 FROM finding_states fs WHERE fs.fingerprint = f.fingerprint AND fs.status = 'accepted')",
+            &[],
+        )
+        .await?;
+    // (Bereich, System) → Befunde
+    let mut groups: BTreeMap<(&'static str, i64), Vec<(Severity, i64)>> = BTreeMap::new();
+    for g in [("total", 0), ("infra", 0), ("ad", 0)] {
+        groups.insert(g, Vec::new());
+    }
+    for r in tx.query("SELECT id FROM systems", &[]).await? {
+        groups.insert(("system", r.get(0)), Vec::new());
+    }
+    for r in &rows {
+        let sys: Option<i64> = r.get(0);
+        let item = (Severity::parse(r.get(1)), r.get::<_, i64>(2));
+        groups.entry(("total", 0)).or_default().push(item);
+        match sys {
+            Some(id) => {
+                groups.entry(("infra", 0)).or_default().push(item);
+                groups.entry(("system", id)).or_default().push(item);
+            }
+            None => groups.entry(("ad", 0)).or_default().push(item),
+        }
+    }
+    let previous: HashMap<(String, i64), (String, i32)> = tx
+        .query(
+            "SELECT DISTINCT ON (scope, system_id) scope, system_id, grade, score FROM score_history
+             ORDER BY scope, system_id, day DESC",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| ((r.get(0), r.get(1)), (r.get(2), r.get(3))))
+        .collect();
+    let today = Utc::now().date_naive();
+    let mut changes = Vec::new();
+    for ((scope, sys), items) in groups {
+        let mut counts = [0i32; 5];
+        for (sev, _) in &items {
+            counts[*sev as usize] += 1;
+        }
+        let s = score(items);
+        tx.execute(
+            "INSERT INTO score_history (day, scope, system_id, score, grade, critical, high, medium, low, info)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             ON CONFLICT (day, scope, system_id) DO UPDATE SET score = excluded.score, grade = excluded.grade,
+                critical = excluded.critical, high = excluded.high, medium = excluded.medium,
+                low = excluded.low, info = excluded.info",
+            &[
+                &today,
+                &scope,
+                &sys,
+                &(s.score as i32),
+                &s.grade,
+                &counts[0],
+                &counts[1],
+                &counts[2],
+                &counts[3],
+                &counts[4],
+            ],
+        )
+        .await?;
+        if let Some((old_grade, old_score)) = previous.get(&(scope.to_string(), sys)) {
+            if s.grade > old_grade.as_str() {
+                changes.push(GradeChange {
+                    scope,
+                    system_id: sys,
+                    old_grade: old_grade.clone(),
+                    new_grade: s.grade.to_string(),
+                    old_score: *old_score,
+                    new_score: s.score as i32,
+                });
+            }
+        }
+    }
+    Ok(changes)
 }
 
 /// Stabile Kennung eines Befunds über Analyseläufe hinweg (für den Audit-Assist).

@@ -23,6 +23,85 @@ pub struct ServerConfig {
     pub auth: AuthConfig,
     pub ldap: LdapConfig,
     pub analysis: AnalysisConfig,
+    pub notify: NotifyConfig,
+}
+
+/// Benachrichtigungen per E-Mail und Webhook (Teams, Slack).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NotifyConfig {
+    /// Adresse der Weboberfläche für Links in Nachrichten, z. B. `http://10.50.10.143:8089`.
+    pub public_url: Option<String>,
+    /// Neue Befunde ab dieser Schwere melden: critical, high, medium, low, info oder off.
+    pub min_severity: String,
+    /// Melden, wenn sich die Note gesamt, des AD oder eines Systems verschlechtert.
+    pub grade_drop: bool,
+    /// Wochenbericht, z. B. `mo 07:00` (Wochentag und Uhrzeit, Serverzeit). Leer = aus.
+    pub weekly_summary: Option<String>,
+    pub smtp: SmtpConfig,
+    pub webhooks: Vec<WebhookConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SmtpConfig {
+    pub host: Option<String>,
+    pub port: u16,
+    /// `starttls` (Port 587), `tls` (Port 465) oder `none` (nur internes Relay)
+    pub security: String,
+    pub username: Option<String>,
+    #[serde(skip_serializing)]
+    pub password: Option<String>,
+    pub from: Option<String>,
+    pub to: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookConfig {
+    pub url: String,
+    /// `teams` (Workflows/Adaptive Card), `slack` (auch Mattermost, Rocket.Chat) oder `json`
+    #[serde(default = "default_webhook_format")]
+    pub format: String,
+}
+
+fn default_webhook_format() -> String {
+    "slack".into()
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            public_url: None,
+            min_severity: "high".into(),
+            grade_drop: true,
+            weekly_summary: None,
+            smtp: SmtpConfig::default(),
+            webhooks: Vec::new(),
+        }
+    }
+}
+
+impl Default for SmtpConfig {
+    fn default() -> Self {
+        Self {
+            host: None,
+            port: 587,
+            security: "starttls".into(),
+            username: None,
+            password: None,
+            from: None,
+            to: Vec::new(),
+        }
+    }
+}
+
+impl NotifyConfig {
+    pub fn smtp_configured(&self) -> bool {
+        self.smtp.host.is_some() && self.smtp.from.is_some() && !self.smtp.to.is_empty()
+    }
+    pub fn any_channel(&self) -> bool {
+        self.smtp_configured() || !self.webhooks.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -87,6 +166,7 @@ impl Default for ServerConfig {
             auth: AuthConfig::default(),
             ldap: LdapConfig::default(),
             analysis: AnalysisConfig::default(),
+            notify: NotifyConfig::default(),
         }
     }
 }
@@ -180,6 +260,60 @@ impl ServerConfig {
         }
         if let Some(v) = env("PC_LDAP_SYNC_INTERVAL_MINUTES").and_then(|v| v.parse().ok()) {
             self.ldap.sync_interval_minutes = v;
+        }
+        let list = |v: String| -> Vec<String> {
+            v.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        let n = &mut self.notify;
+        if let Some(v) = env("PC_PUBLIC_URL") {
+            n.public_url = Some(v);
+        }
+        if let Some(v) = env("PC_NOTIFY_MIN_SEVERITY") {
+            n.min_severity = v;
+        }
+        if let Some(v) = env("PC_NOTIFY_GRADE_DROP") {
+            n.grade_drop = !matches!(v.as_str(), "0" | "false" | "nein");
+        }
+        if let Some(v) = env("PC_NOTIFY_WEEKLY") {
+            n.weekly_summary = Some(v);
+        }
+        if let Some(v) = env("PC_SMTP_HOST") {
+            n.smtp.host = Some(v);
+        }
+        if let Some(v) = env("PC_SMTP_PORT").and_then(|v| v.parse().ok()) {
+            n.smtp.port = v;
+        }
+        if let Some(v) = env("PC_SMTP_SECURITY") {
+            n.smtp.security = v;
+        }
+        if let Some(v) = env("PC_SMTP_USER") {
+            n.smtp.username = Some(v);
+        }
+        if let Some(v) = env("PC_SMTP_PASSWORD") {
+            n.smtp.password = Some(v);
+        }
+        if let Some(v) = env("PC_SMTP_FROM") {
+            n.smtp.from = Some(v);
+        }
+        if let Some(v) = env("PC_SMTP_TO") {
+            n.smtp.to = list(v);
+        }
+        for (var, format) in [
+            ("PC_WEBHOOK_TEAMS", "teams"),
+            ("PC_WEBHOOK_SLACK", "slack"),
+            ("PC_WEBHOOK_JSON", "json"),
+        ] {
+            if let Some(v) = env(var) {
+                n.webhooks.retain(|w| w.format != format);
+                n.webhooks
+                    .extend(list(v).into_iter().map(|url| WebhookConfig {
+                        url,
+                        format: format.into(),
+                    }));
+            }
         }
     }
 }

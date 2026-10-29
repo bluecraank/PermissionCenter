@@ -14,6 +14,8 @@ use pc_common::{ScanReport, REPORT_SCHEMA_VERSION};
 pub struct IngestResult {
     pub system_id: i64,
     pub duplicate: bool,
+    /// Erkannte Änderungen gegenüber dem vorherigen Scan.
+    pub changes: usize,
 }
 
 fn folder_name(path: &str) -> String {
@@ -62,6 +64,7 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
         return Ok(IngestResult {
             system_id: row.get(0),
             duplicate: true,
+            changes: 0,
         });
     }
 
@@ -141,7 +144,13 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
         .await?
         .get(0);
 
+    let mut changes = 0;
     if is_newest {
+        // Vorheriger Stand für den Änderungsverlauf (vor dem Ersetzen)
+        let before = match last_finished {
+            Some(_) => Some(crate::changes::snapshot(tx, system_id).await?),
+            None => None,
+        };
         tx.execute(
             "UPDATE systems SET last_scan_id = $2 WHERE id = $1",
             &[&system_id, &scan_id],
@@ -243,6 +252,13 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
                 .await?;
             }
         }
+
+        if let Some(before) = before {
+            let after = crate::changes::snapshot(tx, system_id).await?;
+            let list = crate::changes::diff(&before, &after, &h.hostname);
+            crate::changes::store(tx, system_id, scan_id, now, &list).await?;
+            changes = list.len();
+        }
     }
 
     // Auflösung des Clients übernehmen; bekannte Namen nicht durch „unbekannt“ überschreiben.
@@ -264,6 +280,7 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
     Ok(IngestResult {
         system_id,
         duplicate: false,
+        changes,
     })
 }
 

@@ -15,6 +15,10 @@ import FindingsPage from '@/pages/findings'
 import RecommendationsPage from '@/pages/recommendations'
 import AuditPage from '@/pages/audit'
 import AssistPage from '@/pages/assist'
+import ChangesPage from '@/pages/changes'
+import AccessPage from '@/pages/access'
+import OwnersPage from '@/pages/owners'
+import { AuditReportPage, PrincipalReportPage } from '@/pages/reports'
 import PrincipalsPage from '@/pages/principals'
 import PrincipalDetailPage from '@/pages/principal-detail'
 import AdPage from '@/pages/active-directory'
@@ -33,6 +37,8 @@ createRoot(document.getElementById('root')!).render(
         <TooltipProvider>
           <BrowserRouter>
             <Routes>
+              <Route path="report/audit" element={<AuditReportPage />} />
+              <Route path="report/principal/:sid" element={<PrincipalReportPage />} />
               <Route element={<AppLayout />}>
                 <Route index element={<DashboardPage />} />
                 <Route path="landscape" element={<LandscapePage />} />
@@ -44,6 +50,9 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="findings" element={<FindingsPage />} />
                 <Route path="audit" element={<AuditPage />} />
                 <Route path="assist" element={<AssistPage />} />
+                <Route path="changes" element={<ChangesPage />} />
+                <Route path="access" element={<AccessPage />} />
+                <Route path="owners" element={<OwnersPage />} />
                 <Route path="recommendations" element={<RecommendationsPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="*" element={<NotFoundPage />} />

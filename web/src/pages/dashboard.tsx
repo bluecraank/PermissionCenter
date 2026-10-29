@@ -17,6 +17,7 @@ import {
   SeverityDots,
   StatCard,
 } from '@/components/common'
+import { RecentChanges, ScoreTrend } from '@/components/insights'
 import { api, type Dashboard } from '@/lib/api'
 import { dateTime, num, relative, SEVERITIES, severityColor, severityLabel } from '@/lib/format'
 
@@ -103,6 +104,18 @@ export default function DashboardPage() {
           />
         </div>
       </div>
+
+      {!empty && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Entwicklung der Bewertung</CardTitle>
+            <CardDescription>Punktzahl der letzten 90 Tage (ohne akzeptierte Ausnahmen)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScoreTrend />
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-5">
         <Card className="lg:col-span-2">
@@ -217,6 +230,14 @@ export default function DashboardPage() {
                   Noch keine AD-Daten. <Link to="/ad" className="underline">Jetzt synchronisieren oder importieren</Link>.
                 </p>
               )}
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Letzte Änderungen</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <RecentChanges />
             </CardContent>
           </Card>
           <Card>

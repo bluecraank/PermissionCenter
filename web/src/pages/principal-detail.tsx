@@ -1,8 +1,9 @@
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Folder, Share2 } from 'lucide-react'
+import { Download, FileText, Folder, History, Share2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -53,6 +54,25 @@ export default function PrincipalDetailPage() {
             <StatusBadge status={p.status} />
             <span className="font-mono text-xs">{p.sid}</span>
           </span>
+        }
+        actions={
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/report/principal/${encodeURIComponent(p.sid)}`}>
+                <FileText className="size-4" /> Zugriffsbericht
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={`/api/v1/export/principal/${encodeURIComponent(p.sid)}`}>
+                <Download className="size-4" /> CSV
+              </a>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <Link to={`/changes?sid=${encodeURIComponent(p.sid)}&days=365`}>
+                <History className="size-4" /> Änderungen
+              </Link>
+            </Button>
+          </>
         }
       />
 

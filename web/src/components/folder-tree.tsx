@@ -1,12 +1,15 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { AlertCircle, ChevronRight, Folder, FolderLock, FolderOpen, HardDrive, Link2Off, Share2 } from 'lucide-react'
+import { AlertCircle, ChevronRight, Folder, FolderLock, FolderOpen, FolderSearch, HardDrive, Link2Off, Share2 } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { OwnerField } from '@/components/owner'
 import { EmptyState, Loading, PrincipalLink, RightsBadge, SeverityBadge, Spinner } from '@/components/common'
 import { api, type Folder as FolderT, type FolderDetail } from '@/lib/api'
 import { bytes, num } from '@/lib/format'
@@ -135,6 +138,17 @@ export function FolderDetailPanel({ systemId, localId, onNavigate }: { systemId:
             )
           }
         />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="min-w-60 flex-1">
+          <OwnerField systemId={systemId} path={data.path} />
+        </div>
+        <Button variant="outline" size="sm" asChild>
+          <Link to={`/access?system_id=${systemId}&path=${encodeURIComponent(data.path)}`}>
+            <FolderSearch className="size-4" /> Wer hat Zugriff?
+          </Link>
+        </Button>
       </div>
 
       {data.finding_list.length > 0 && (
