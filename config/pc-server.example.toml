@@ -1,0 +1,57 @@
+# ============================================================================
+#  PermissionCenter-Server – Konfiguration (pc-server.toml)
+#
+#  Start: pc-server --config pc-server.toml serve
+#  Jeder Wert kann per Umgebungsvariable überschrieben werden (z. B. in der
+#  .env für Docker Compose): PC_LISTEN, PC_DATABASE_URL, PC_API_TOKENS,
+#  PC_CLIENT_RELEASES_DIR, PC_CLIENT_UPDATE_PUBLIC_KEY, PC_LDAP_URL,
+#  PC_LDAP_BIND_DN, PC_LDAP_BIND_PASSWORD, PC_LDAP_BASE_DN,
+#  PC_LDAP_SYNC_INTERVAL_MINUTES, PC_LOG
+# ============================================================================
+
+# Adresse und Port der Web-Oberfläche/API
+listen = "0.0.0.0:8080"
+
+# PostgreSQL-Verbindung
+database_url = "postgres://permcenter:GEHEIM@localhost:5432/permcenter"
+database_pool_size = 16
+
+# Tokens, die Clients beim Upload senden müssen (leer = ohne Token, nicht empfohlen)
+api_tokens = ["bitte-aendern"]
+
+# Maximale Größe eines Reports in MiB (unkomprimiert)
+max_upload_mb = 512
+
+# OTA-Updates: Ablage der Client-Releases und öffentlicher Signaturschlüssel
+client_releases_dir = "client-releases"
+# client_update_public_key = "Fe52J5gwT4muPwJdw+vcNaFbidUuxVF5YHcNDDWTGqU="
+
+
+[auth]
+# "none" = kein Login (aktueller Stand). "ldap" ist vorbereitet, aber noch nicht aktiv.
+mode = "none"
+# allowed_group = "GG_PermissionCenter_Admins"
+
+
+[ldap]
+# Active-Directory-Anbindung (optional; alternativ tools/Export-ADData.ps1 + Import)
+# url = "ldaps://dc01.firma.local:636"
+# bind_dn = "svc-permcenter@firma.local"
+# bind_password = "geheim"
+# base_dn = "DC=firma,DC=local"
+starttls = false
+# Zertifikatsprüfung abschalten – nur für Tests!
+no_tls_verify = false
+# Automatischer Abgleich in Minuten (0 = nur manuell über die Oberfläche)
+sync_interval_minutes = 0
+
+
+[analysis]
+# Benutzer ohne Anmeldung seit so vielen Tagen gelten als inaktiv
+inactive_days = 90
+# Systeme ohne Scan seit so vielen Tagen gelten als veraltet
+stale_scan_days = 7
+# Explizite Rechte ab dieser Ordnertiefe gelten als zu tief verschachtelt
+deep_explicit_depth = 6
+# Maximale Einzelbefunde je Regel und System
+max_findings_per_rule = 500

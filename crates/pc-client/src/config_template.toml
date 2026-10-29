@@ -1,0 +1,129 @@
+# ============================================================================
+#  PermissionCenter-Client – Konfiguration
+#
+#  Ablage: neben pc-client.exe oder %ProgramData%\PermissionCenter\pc-client.toml
+#  Format: TOML – „schlüssel = wert“, Text in Anführungszeichen, # = Kommentar.
+#  Windows-Pfade: Backslash doppelt schreiben ("C:\\Daten") oder einfache
+#  Anführungszeichen verwenden ('C:\Daten').
+# ============================================================================
+
+[server]
+# Adresse des PermissionCenter-Servers (ohne /api am Ende)
+# url = "https://permcenter.firma.local:8080"
+
+# Token für Uploads (muss in PC_API_TOKENS des Servers stehen)
+# api_token = "geheim"
+
+# Zertifikatsprüfung abschalten – nur für Tests mit selbstsignierten Zertifikaten!
+accept_invalid_certs = false
+
+# Zeitlimit für Upload/Download in Sekunden
+timeout_secs = 300
+
+
+[scan]
+# Alle lokalen Festplatten scannen
+local_drives = true
+
+# Nur bestimmte Laufwerke, z. B. ["D:", "E:"] – leer = alle
+drives = []
+
+# Lokale Freigaben erkennen und deren Ordner scannen
+shares = true
+
+# Verbundene Netzlaufwerke scannen (im Dienst/als SYSTEM meist nicht sichtbar)
+mapped_drives = false
+
+# Zusätzliche Pfade, auch UNC, z. B. ['\\nas01\daten']
+extra_paths = []
+
+# Ausgeschlossene Ordner (systembekannt).
+#   ?:   = beliebiger Laufwerksbuchstabe
+#   * ?  = Platzhalter innerhalb eines Pfadteils
+#   %VAR% = Umgebungsvariable
+exclude = [
+    '%SystemRoot%',
+    '%ProgramFiles%',
+    '%ProgramFiles(x86)%',
+    '%ProgramData%',
+    '?:\Windows',
+    '?:\Windows.old',
+    '?:\Program Files',
+    '?:\Program Files (x86)',
+    '?:\ProgramData',
+    '?:\$Recycle.Bin',
+    '?:\System Volume Information',
+    '?:\Recovery',
+    '?:\PerfLogs',
+    '?:\Config.Msi',
+    '?:\Boot',
+    '?:\MSOCache',
+    '?:\$WinREAgent',
+    '?:\$Windows.~BT',
+    '?:\$Windows.~WS',
+    '?:\$SysReset',
+    '?:\$GetCurrent',
+    '?:\Users\Default',
+    '?:\Users\*\AppData',
+]
+
+# Ordner mit den Attributen „System“ + „Versteckt“ automatisch überspringen
+skip_system_hidden = true
+
+# Maximale Ordnertiefe ab Laufwerk/Freigabe (auskommentiert = unbegrenzt)
+# max_depth = 12
+
+# "relevant" = nur Ordner mit eigenen Berechtigungen übertragen (empfohlen)
+# "full"     = jeden Ordner übertragen (große Datenmengen)
+report_mode = "relevant"
+
+# Diese oberen Ebenen werden immer übertragen (Gerüst für den Verzeichnisbaum)
+skeleton_depth = 2
+
+
+[storage]
+# Lokale Datenbank (auskommentiert = %ProgramData%\PermissionCenter\pc-client.db)
+# db_path = 'C:\ProgramData\PermissionCenter\pc-client.db'
+
+# Anzahl der lokal aufbewahrten Scans
+keep_scans = 10
+
+
+[update]
+# Vor jedem Scan (bzw. im Dienst regelmäßig) nach neuer Client-Version suchen
+auto_update = true
+
+# Öffentlicher Signaturschlüssel (Ausgabe von „pc-server gen-signing-key“)
+# public_key = "Fe52J5gwT4muPwJdw+vcNaFbidUuxVF5YHcNDDWTGqU="
+
+# Nur signierte Updates installieren – nur zu Testzwecken abschalten!
+require_signature = true
+
+
+[logging]
+# Logverzeichnis (auskommentiert = %ProgramData%\PermissionCenter\logs)
+# dir = 'D:\Logs\PermissionCenter'
+
+# Detailgrad: error, warn, info, debug, trace
+level = "info"
+
+# Anzahl aufbewahrter Tageslogs
+keep_days = 30
+
+# So viele einzelne Lesefehler je Scan protokollieren, danach nur noch zählen
+max_logged_scan_errors = 200
+
+
+[service]
+# Nur im Dienstbetrieb (pc-client service install):
+# tägliche Scan-Uhrzeit (Ortszeit)
+scan_time = "02:00"
+
+# Alternativ alle n Stunden scannen (überschreibt scan_time)
+# interval_hours = 12
+
+# Direkt nach dem Dienststart einmal scannen
+scan_on_start = false
+
+# Abstand der Update-Prüfung in Minuten (0 = nur vor Scans)
+update_check_minutes = 60
