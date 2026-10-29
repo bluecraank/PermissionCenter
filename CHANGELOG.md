@@ -7,6 +7,8 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
 ### Hinzugefügt
 - **Audit-Assist** (Weboberfläche und API `/api/v1/assist`): arbeitet alle offenen Befunde Schritt für Schritt ab, mit Anleitung, betroffenen Objekten und einem PowerShell-Skript je Befund. Das Skript läuft standardmäßig als Probelauf, ändert erst mit `-Apply` und sichert vorher ACLs bzw. AD-Objekte
 - Bearbeitungsstand je Befund (erledigt, Ausnahme mit Begründung), der Neuberechnungen überdauert. Der nächste Scan bzw. AD-Abgleich bestätigt Behebungen automatisch
