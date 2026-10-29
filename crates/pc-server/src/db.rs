@@ -13,7 +13,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{GenericClient, NoTls, Row};
 use tracing::{info, warn};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS findings (
 CREATE INDEX IF NOT EXISTS idx_findings_system ON findings(system_id);
 CREATE INDEX IF NOT EXISTS idx_findings_rule ON findings(rule);
 CREATE INDEX IF NOT EXISTS idx_findings_sid ON findings(sid);
+ALTER TABLE findings ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+CREATE INDEX IF NOT EXISTS idx_findings_fingerprint ON findings(fingerprint);
+
+-- Audit-Assist: Bearbeitungsstand je Befund (überdauert die Neuberechnung der Befunde)
+CREATE TABLE IF NOT EXISTS finding_states (
+    fingerprint TEXT PRIMARY KEY,
+    rule        TEXT NOT NULL,
+    system_id   BIGINT REFERENCES systems(id) ON DELETE CASCADE,
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    note        TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL,
+    resolved_at TIMESTAMPTZ
+);
 "#;
 
 /// Sperre, die parallele Analyse-Läufe serialisiert.

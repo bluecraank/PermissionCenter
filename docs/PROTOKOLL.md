@@ -58,6 +58,29 @@ Mapping Anforderung → Umsetzung → Test: [ANFORDERUNGEN.md](ANFORDERUNGEN.md)
 - **Windows Server 2016–2025**: nur auf Windows 11 getestet.
 - **UI** typgeprüft, gebaut und ausgeliefert, aber nicht im Browser visuell geprüft.
 
+## 2026-10-29 – Audit-Assist (Unreleased)
+
+**Anforderung:** Ein Assistent, der einfach und Schritt für Schritt hilft, alle offenen Probleme zu beheben.
+
+**Entscheidungen**
+- Der Server ändert **nichts selbst**. Er hat keinen Zugriff auf die Dateiserver, und der AD-Zugang ist nur lesend. Stattdessen erzeugt er je Befund ein geprüftes PowerShell-Skript mit Probelauf, `-Apply` und Sicherung.
+- Ein Befund ist erst behoben, wenn neue Daten ihn bestätigen. Das Klicken auf „Erledigt“ allein reicht nicht.
+- Ausnahmen brauchen eine Begründung und fließen nicht in die Bewertung ein (audit-tauglich nachvollziehbar).
+
+**Tests**
+- Alle 17 Skripttypen aus den Demodaten mit dem Parser von Windows PowerShell 5.1 geprüft: keine Syntaxfehler.
+- Realer Durchlauf auf NTFS:
+  - Testordner mit verwaister SID (Erlauben und Verweigern) angelegt und gescannt.
+  - Skript ausgeführt, erst als Probelauf, dann mit `-Apply`.
+  - Erneut gescannt: Status `resolved`.
+  - Die Sicherung wurde erfolgreich zurückgespielt.
+  - Dabei gefunden und behoben: `icacls /remove` scheitert an verwaisten SIDs. Das Skript entfernt diese Einträge jetzt über .NET.
+- „Nicht bestätigt“ geprüft: als erledigt markiert, Scan ohne Änderung, Status `failed`.
+- Ausnahme ohne Begründung wird abgelehnt (400). Die Ausnahme überdauert eine Neuanalyse und wird im Audit gezählt.
+- Seite im Browser (Edge headless) geprüft.
+
+**Nicht verifiziert:** AD-Skripte (`Remove-ADGroup` usw.), Freigabe-Skripte (`*-SmbShareAccess`) und die Übertragung auf Gruppen (`-Group`) nur per Parser geprüft, nicht ausgeführt. Grund: kein AD bzw. keine Adminrechte auf dem Testrechner.
+
 ### Ideen für nächste Versionen
 - Login über AD aktivieren (vorbereitet), Rollen (Leser/Admin).
 - Veränderungsverlauf zwischen Scans (Diff der Berechtigungen).

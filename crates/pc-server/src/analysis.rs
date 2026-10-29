@@ -695,7 +695,7 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
     {
         let sink = tx
             .copy_in(
-                "COPY findings (system_id, rule, severity, title, detail, path, sid, affected, created_at) FROM STDIN BINARY",
+                "COPY findings (system_id, rule, severity, title, detail, path, sid, affected, created_at, fingerprint) FROM STDIN BINARY",
             )
             .await?;
         let writer = BinaryCopyInWriter::new(
@@ -710,11 +710,13 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
                 Type::TEXT,
                 Type::INT8,
                 Type::TIMESTAMPTZ,
+                Type::TEXT,
             ],
         );
         pin_mut!(writer);
         for f in &findings {
             let sev = rule(f.rule).map(|r| r.severity).unwrap_or(Severity::Info);
+            let fp = fingerprint(f);
             writer
                 .as_mut()
                 .write(&[
@@ -727,15 +729,51 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
                     &f.sid,
                     &f.affected,
                     &now,
+                    &fp,
                 ])
                 .await?;
         }
         writer.finish().await?;
     }
+    // Audit-Assist: verschwundene Befunde gelten als behoben, wieder aufgetauchte als offen
+    tx.execute(
+        "UPDATE finding_states SET status = 'resolved', resolved_at = $1
+         WHERE status IN ('fixed', 'accepted')
+           AND NOT EXISTS (SELECT 1 FROM findings f WHERE f.fingerprint = finding_states.fingerprint)",
+        &[&now],
+    )
+    .await?;
+    tx.execute(
+        "DELETE FROM finding_states WHERE status = 'resolved'
+           AND EXISTS (SELECT 1 FROM findings f WHERE f.fingerprint = finding_states.fingerprint)",
+        &[],
+    )
+    .await?;
     crate::db::set_meta(tx, "analysis_at", Some(&now.to_rfc3339())).await?;
     Ok(AnalysisSummary {
         findings: findings.len(),
     })
+}
+
+/// Stabile Kennung eines Befunds über Analyseläufe hinweg (für den Audit-Assist).
+///
+/// Zusammengefasste Befunde (je System bzw. je System und SID) werden ohne Pfad
+/// gebildet, da die Beispielpfade wechseln können.
+fn fingerprint(f: &Finding) -> String {
+    let path = match f.rule {
+        "BROAD_WRITE" | "SHARE_OPEN" => f.path.as_deref().unwrap_or(""),
+        _ => "",
+    };
+    let key = format!(
+        "{}|{}|{}|{}",
+        f.rule,
+        f.system_id
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "ad".into()),
+        f.sid.as_deref().unwrap_or(""),
+        path.to_lowercase()
+    );
+    pc_common::release::sha256_hex(key.as_bytes())[..24].to_string()
 }
 
 /// Gruppen, deren Name auf Administration hindeutet (z. B. „Domänen-Admins“, „FS-Admins“).

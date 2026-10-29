@@ -1,8 +1,9 @@
 import { Fragment, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronLeft, ChevronRight, Lightbulb } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, Lightbulb, Wrench } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { EmptyState, ErrorState, Loading, SeverityBadge } from '@/components/common'
@@ -64,7 +65,19 @@ export function FindingsTable({ filter, showSystem = true }: { filter: FindingFi
                   <SeverityBadge severity={f.severity} />
                 </TableCell>
                 <TableCell className="max-w-xl">
-                  <div className="truncate font-medium">{f.title}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="truncate font-medium">{f.title}</span>
+                    {f.assist_status === 'accepted' && (
+                      <Badge variant="outline" className="shrink-0 font-normal">
+                        Ausnahme
+                      </Badge>
+                    )}
+                    {f.assist_status === 'fixed' && (
+                      <Badge variant="outline" className="text-sev-low shrink-0 font-normal">
+                        Erledigt, Scan ausstehend
+                      </Badge>
+                    )}
+                  </div>
                   <div className="text-muted-foreground truncate font-mono text-xs">{f.path ?? f.rule_title}</div>
                 </TableCell>
                 {showSystem && (
@@ -92,6 +105,13 @@ export function FindingsTable({ filter, showSystem = true }: { filter: FindingFi
                       </div>
                     )}
                     <div className="flex flex-wrap gap-2">
+                      {f.fingerprint && (
+                        <Button size="sm" asChild>
+                          <Link to={`/assist?f=${f.fingerprint}`}>
+                            <Wrench className="size-4" /> Im Audit-Assist beheben
+                          </Link>
+                        </Button>
+                      )}
                       {f.sid && (
                         <Button size="sm" variant="outline" asChild>
                           <Link to={`/principals/${encodeURIComponent(f.sid)}`}>Prinzipal anzeigen</Link>

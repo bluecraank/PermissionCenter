@@ -8,12 +8,17 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 ## [Unreleased]
 
 ### Hinzugefügt
+- **Audit-Assist** (Weboberfläche und API `/api/v1/assist`): arbeitet alle offenen Befunde Schritt für Schritt ab, mit Anleitung, betroffenen Objekten und einem PowerShell-Skript je Befund. Das Skript läuft standardmäßig als Probelauf, ändert erst mit `-Apply` und sichert vorher ACLs bzw. AD-Objekte
+- Bearbeitungsstand je Befund (erledigt, Ausnahme mit Begründung), der Neuberechnungen überdauert. Der nächste Scan bzw. AD-Abgleich bestätigt Behebungen automatisch
+- Einstieg in den Audit-Assist über Dashboard, Audit und Befundliste; Kennzeichnung von Ausnahmen in Befundliste und Audit
 - `pc-server publish-client --server <url> --token <token>`: Client-Release lokal signieren und per API auf einen entfernten Server hochladen
 
 ### Behoben
 - `Install-PcClient.ps1` brach unter Windows PowerShell 5.1 mit `NativeCommandError` ab, sobald der Client Logzeilen auf stderr schrieb
 
 ### Geändert
+- Als Ausnahme akzeptierte Befunde zählen nicht mehr in Bewertung, Audit, Empfehlungen und Dashboard-Statistik
+- Datenbankschema Version 2 (`findings.fingerprint`, Tabelle `finding_states`). Die Migration erfolgt beim Start automatisch
 - Verwaltungszeilen eines Client-Laufs (Start, Konfiguration, Dauer) erscheinen nur noch in der Logdatei, nicht mehr auf der Konsole
 
 ## [0.1.0] - 2026-10-29

@@ -7,6 +7,7 @@ import {
   FolderTree,
   LayoutDashboard,
   Lightbulb,
+  ListChecks,
   Moon,
   Network,
   Server,
@@ -57,6 +58,7 @@ const nav = [
     label: 'Auswertung',
     items: [
       { to: '/findings', label: 'Befunde', icon: ShieldAlert, badge: true },
+      { to: '/assist', label: 'Audit-Assist', icon: ListChecks },
       { to: '/audit', label: 'Audit', icon: ClipboardCheck },
       { to: '/recommendations', label: 'Empfehlungen', icon: Lightbulb },
     ],
@@ -82,6 +84,7 @@ const titles: [RegExp, string][] = [
   [/^\/principals/, 'Benutzer & Gruppen'],
   [/^\/ad/, 'Active Directory'],
   [/^\/findings/, 'Befunde'],
+  [/^\/assist/, 'Audit-Assist'],
   [/^\/audit/, 'Audit'],
   [/^\/recommendations/, 'Empfehlungen'],
   [/^\/settings/, 'Einstellungen'],
