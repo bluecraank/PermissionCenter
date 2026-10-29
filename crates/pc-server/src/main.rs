@@ -127,7 +127,12 @@ async fn run(cli: Cli) -> Result<()> {
             let mut seed = [0u8; 32];
             getrandom::fill(&mut seed).map_err(|e| anyhow::anyhow!("Zufallsquelle: {e}"))?;
             let (private, public) = pc_common::release::keypair_from_seed(seed);
-            std::fs::write(out, &private)?;
+            if let Some(dir) = out.parent().filter(|d| !d.as_os_str().is_empty()) {
+                std::fs::create_dir_all(dir)
+                    .with_context(|| format!("Ordner {} nicht anlegbar", dir.display()))?;
+            }
+            std::fs::write(out, &private)
+                .with_context(|| format!("{} nicht schreibbar", out.display()))?;
             println!("Privater Schlüssel gespeichert: {}", out.display());
             println!("Öffentlicher Schlüssel (in pc-client.toml [update] public_key und PC_CLIENT_UPDATE_PUBLIC_KEY eintragen):");
             println!("{public}");
