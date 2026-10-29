@@ -14,6 +14,7 @@ import SystemDetailPage from '@/pages/system-detail'
 import FindingsPage from '@/pages/findings'
 import RecommendationsPage from '@/pages/recommendations'
 import AuditPage from '@/pages/audit'
+import AssistPage from '@/pages/assist'
 import PrincipalsPage from '@/pages/principals'
 import PrincipalDetailPage from '@/pages/principal-detail'
 import AdPage from '@/pages/active-directory'
@@ -42,6 +43,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="ad" element={<AdPage />} />
                 <Route path="findings" element={<FindingsPage />} />
                 <Route path="audit" element={<AuditPage />} />
+                <Route path="assist" element={<AssistPage />} />
                 <Route path="recommendations" element={<RecommendationsPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="*" element={<NotFoundPage />} />

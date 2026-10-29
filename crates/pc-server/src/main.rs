@@ -7,6 +7,7 @@
 mod ad;
 mod analysis;
 mod api;
+mod assist;
 mod config;
 mod db;
 mod directory;
@@ -269,6 +270,27 @@ async fn serve(state: AppState) -> Result<()> {
     let cfg = state.cfg.clone();
     if cfg.api_tokens.is_empty() {
         warn!("Keine api_tokens konfiguriert – Uploads werden ohne Token angenommen");
+    }
+
+    // Befunde aus älteren Versionen haben noch keine Kennung für den Audit-Assist
+    {
+        let mut client = state.db.get().await?;
+        let tx = client.transaction().await?;
+        let legacy: bool = tx
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM findings WHERE fingerprint IS NULL)",
+                &[],
+            )
+            .await?
+            .get(0);
+        if legacy {
+            let a = analysis::run(&tx, &cfg.analysis).await?;
+            tx.commit().await?;
+            info!(
+                "Analyse für Audit-Assist neu berechnet ({} Befunde)",
+                a.findings
+            );
+        }
     }
 
     // Periodischer AD-Abgleich

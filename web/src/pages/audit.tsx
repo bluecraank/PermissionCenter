@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, Printer, RefreshCw, XCircle } from 'lucide-react'
+import { CheckCircle2, ListChecks, Printer, RefreshCw, XCircle } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -42,8 +42,13 @@ export default function AuditPage() {
             <Button variant="outline" size="sm" onClick={() => window.print()}>
               <Printer className="size-4" /> Drucken
             </Button>
-            <Button size="sm" onClick={() => run.mutate()} disabled={run.isPending}>
+            <Button variant="outline" size="sm" onClick={() => run.mutate()} disabled={run.isPending}>
               <RefreshCw className={cn('size-4', run.isPending && 'animate-spin')} /> Neu bewerten
+            </Button>
+            <Button size="sm" asChild>
+              <Link to="/assist">
+                <ListChecks className="size-4" /> Audit-Assist starten
+              </Link>
             </Button>
           </>
         }
@@ -144,6 +149,11 @@ export default function AuditPage() {
                           {c.title}
                         </Link>
                         <div className="text-muted-foreground text-xs">{c.description}</div>
+                        {c.accepted > 0 && (
+                          <div className="text-muted-foreground mt-1 text-xs italic">
+                            {num(c.accepted)} als Ausnahme akzeptiert
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <SeverityBadge severity={c.severity} />

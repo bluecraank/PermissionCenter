@@ -19,7 +19,7 @@ use crate::analysis::{self, Severity, RULES};
 use crate::config::ServerConfig;
 use crate::db::{self, count, query_json, query_one_json, Db};
 use crate::directory::Directory;
-use crate::{ad, ingest, releases};
+use crate::{ad, assist, ingest, releases};
 use pc_common::rights::Rights;
 use pc_common::{wellknown, AdSnapshot, ScanReport, UploadResponse};
 
@@ -76,6 +76,9 @@ impl IntoResponse for ApiError {
 
 type ApiResult<T = Value> = Result<Json<T>, ApiError>;
 
+/// Befunde ohne akzeptierte Ausnahme (Audit-Assist); nur diese zählen in Bewertung und Statistik.
+const NOT_ACCEPTED: &str = "NOT EXISTS (SELECT 1 FROM finding_states fs WHERE fs.fingerprint = findings.fingerprint AND fs.status = 'accepted')";
+
 const SEV_ORDER: &str =
     "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END";
 
@@ -102,6 +105,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/recommendations", get(recommendations))
         .route("/api/v1/audit", get(audit))
         .route("/api/v1/rules", get(rules))
+        .route("/api/v1/assist", get(assist_overview))
+        .route(
+            "/api/v1/assist/{fingerprint}",
+            get(assist_detail).post(assist_update),
+        )
         .route("/api/v1/principals", get(principals))
         .route("/api/v1/principals/{sid}", get(principal_detail))
         .route("/api/v1/ad/summary", get(ad_summary))
@@ -364,7 +372,9 @@ async fn severity_counts(
     for s in ["critical", "high", "medium", "low", "info"] {
         m.insert(s.into(), json!(0));
     }
-    let sql = format!("SELECT severity, COUNT(*) FROM findings WHERE {filter} GROUP BY severity");
+    let sql = format!(
+        "SELECT severity, COUNT(*) FROM findings WHERE {NOT_ACCEPTED} AND ({filter}) GROUP BY severity"
+    );
     for r in c.query(&sql, params).await? {
         m.insert(r.get::<_, String>(0), json!(r.get::<_, i64>(1)));
     }
@@ -376,7 +386,8 @@ async fn score_for(
     filter: &str,
     params: &[&(dyn ToSql + Sync)],
 ) -> anyhow::Result<analysis::Score> {
-    let sql = format!("SELECT severity, affected FROM findings WHERE {filter}");
+    let sql =
+        format!("SELECT severity, affected FROM findings WHERE {NOT_ACCEPTED} AND ({filter})");
     let items: Vec<(Severity, i64)> = c
         .query(&sql, params)
         .await?
@@ -458,7 +469,7 @@ async fn dashboard(State(st): State<AppState>) -> ApiResult {
         c,
         &format!(
             "SELECT rule, severity, COUNT(*) AS findings, SUM(affected)::bigint AS affected FROM findings
-             GROUP BY rule, severity ORDER BY {SEV_ORDER}, SUM(affected) DESC"
+             WHERE {NOT_ACCEPTED} GROUP BY rule, severity ORDER BY {SEV_ORDER}, SUM(affected) DESC"
         ),
         &[],
     )
@@ -769,8 +780,10 @@ async fn findings(State(st): State<AppState>, Query(q): Query<FindingQuery>) -> 
     let items: Vec<Value> = query_json(
         c,
         &format!(
-            "SELECT f.id, f.system_id, y.hostname, f.rule, f.severity, f.title, f.detail, f.path, f.sid, f.affected, f.created_at
-             FROM findings f LEFT JOIN systems y ON y.id = f.system_id WHERE {where_}
+            "SELECT f.id, f.system_id, y.hostname, f.rule, f.severity, f.title, f.detail, f.path, f.sid, f.affected, f.created_at,
+                    f.fingerprint, fs.status AS assist_status
+             FROM findings f LEFT JOIN systems y ON y.id = f.system_id
+             LEFT JOIN finding_states fs ON fs.fingerprint = f.fingerprint WHERE {where_}
              ORDER BY {}, f.affected DESC, f.id LIMIT {limit} OFFSET {offset}",
             SEV_ORDER.replace("severity", "f.severity")
         ),
@@ -796,9 +809,12 @@ async fn recommendations(State(st): State<AppState>) -> ApiResult {
     let c = st.db.get().await?;
     let rows = c
         .query(
-            "SELECT f.rule, COUNT(*), SUM(f.affected)::bigint,
-                    COALESCE(array_agg(DISTINCT y.hostname) FILTER (WHERE y.hostname IS NOT NULL), '{}')
-             FROM findings f LEFT JOIN systems y ON y.id = f.system_id GROUP BY f.rule",
+            &format!(
+                "SELECT findings.rule, COUNT(*), SUM(findings.affected)::bigint,
+                        COALESCE(array_agg(DISTINCT y.hostname) FILTER (WHERE y.hostname IS NOT NULL), '{{}}')
+                 FROM findings LEFT JOIN systems y ON y.id = findings.system_id
+                 WHERE {NOT_ACCEPTED} GROUP BY findings.rule"
+            ),
             &[],
         )
         .await?;
@@ -855,12 +871,25 @@ async fn audit(State(st): State<AppState>) -> ApiResult {
     let systems = system_summaries(c, None).await?;
     let counts: HashMap<String, (i64, i64, i64)> = c
         .query(
-            "SELECT rule, COUNT(*), SUM(affected)::bigint, COUNT(DISTINCT system_id) FROM findings GROUP BY rule",
+            &format!(
+                "SELECT rule, COUNT(*), SUM(affected)::bigint, COUNT(DISTINCT system_id) FROM findings
+                 WHERE {NOT_ACCEPTED} GROUP BY rule"
+            ),
             &[],
         )
         .await?
         .iter()
         .map(|r| (r.get(0), (r.get(1), r.get(2), r.get(3))))
+        .collect();
+    let accepted: HashMap<String, i64> = c
+        .query(
+            "SELECT f.rule, COUNT(*) FROM findings f
+             JOIN finding_states fs ON fs.fingerprint = f.fingerprint AND fs.status = 'accepted' GROUP BY f.rule",
+            &[],
+        )
+        .await?
+        .iter()
+        .map(|r| (r.get(0), r.get(1)))
         .collect();
     let checks: Vec<Value> = RULES
         .iter()
@@ -878,6 +907,7 @@ async fn audit(State(st): State<AppState>) -> ApiResult {
                 "affected": affected,
                 "systems_failed": sys,
                 "systems_total": systems.len(),
+                "accepted": accepted.get(r.id).copied().unwrap_or(0),
             })
         })
         .collect();
@@ -897,6 +927,233 @@ async fn analyze(State(st): State<AppState>) -> ApiResult {
     let n = analysis::run(&tx, &st.cfg.analysis).await?.findings;
     tx.commit().await?;
     Ok(Json(json!({ "findings": n })))
+}
+
+// ---------------------------------------------------------------------------
+// Audit-Assist
+
+#[derive(Deserialize)]
+struct AssistQuery {
+    system_id: Option<i64>,
+    scope: Option<String>,
+}
+
+type Ts = chrono::DateTime<chrono::Utc>;
+
+/// Bearbeitungsstand eines Befunds. Ein als behoben markierter Befund, der nach
+/// neueren Scan- bzw. AD-Daten weiterhin besteht, gilt als nicht bestätigt (`failed`).
+fn assist_status(status: Option<&str>, updated: Option<Ts>, data_at: Option<Ts>) -> &'static str {
+    match status {
+        Some("accepted") => "accepted",
+        Some("fixed") => match (updated, data_at) {
+            (Some(u), Some(d)) if d > u => "failed",
+            _ => "pending",
+        },
+        _ => "open",
+    }
+}
+
+fn parse_ts(s: Option<&str>) -> Option<Ts> {
+    s.and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&chrono::Utc))
+}
+
+const ASSIST_SELECT: &str =
+    "SELECT f.id, f.fingerprint, f.system_id, y.hostname, f.rule, f.severity, f.title, f.detail,
+            f.path, f.sid, f.affected, fs.status, fs.note, fs.updated_at, s.received_at AS data_at
+     FROM findings f
+     LEFT JOIN systems y ON y.id = f.system_id
+     LEFT JOIN scans s ON s.id = y.last_scan_id
+     LEFT JOIN finding_states fs ON fs.fingerprint = f.fingerprint";
+
+/// Ergänzt Regeltitel und Bearbeitungsstand. AD-Befunde werden am letzten AD-Abgleich gemessen.
+fn assist_item(v: &mut Value, ad_at: Option<Ts>) {
+    let data_at = if v["system_id"].is_null() {
+        ad_at
+    } else {
+        parse_ts(v["data_at"].as_str())
+    };
+    let status = assist_status(
+        v["status"].as_str(),
+        parse_ts(v["updated_at"].as_str()),
+        data_at,
+    );
+    let r = analysis::rule(v["rule"].as_str().unwrap_or(""));
+    v["rule_title"] = json!(r.map(|x| x.title));
+    v["assist_status"] = json!(status);
+    v["data_at"] = json!(data_at);
+}
+
+async fn assist_overview(State(st): State<AppState>, Query(q): Query<AssistQuery>) -> ApiResult {
+    let c = st.db.get().await?;
+    let c = &**c;
+    let scope = q.scope.clone().unwrap_or_default();
+    let ad_at = parse_ts(db::get_meta(c, "ad_synced_at").await?.as_deref());
+    let mut items = query_json(
+        c,
+        &format!(
+            "{ASSIST_SELECT}
+             WHERE f.fingerprint IS NOT NULL AND ($1::bigint IS NULL OR f.system_id = $1)
+               AND ($2 = '' OR ($2 = 'ad' AND f.system_id IS NULL) OR ($2 = 'system' AND f.system_id IS NOT NULL))
+             ORDER BY {}, f.affected DESC, f.id LIMIT 5000",
+            SEV_ORDER.replace("severity", "f.severity")
+        ),
+        &[&q.system_id, &scope],
+    )
+    .await?;
+    let mut summary: HashMap<&str, i64> = ["open", "failed", "pending", "accepted"]
+        .into_iter()
+        .map(|k| (k, 0))
+        .collect();
+    for v in items.iter_mut() {
+        assist_item(v, ad_at);
+        if let Some(n) = summary.get_mut(v["assist_status"].as_str().unwrap_or("open")) {
+            *n += 1;
+        }
+    }
+    let resolved = query_json(
+        c,
+        "SELECT fs.fingerprint, fs.rule, fs.title, fs.note, fs.system_id, y.hostname, fs.updated_at, fs.resolved_at
+         FROM finding_states fs LEFT JOIN systems y ON y.id = fs.system_id
+         WHERE fs.status = 'resolved' AND ($1::bigint IS NULL OR fs.system_id = $1)
+         ORDER BY fs.resolved_at DESC LIMIT 100",
+        &[&q.system_id],
+    )
+    .await?;
+    let resolved_total = count(
+        c,
+        "SELECT COUNT(*) FROM finding_states WHERE status = 'resolved' AND ($1::bigint IS NULL OR system_id = $1)",
+        &[&q.system_id],
+    )
+    .await?;
+    let mut summary = json!(summary);
+    summary["resolved"] = json!(resolved_total);
+    Ok(Json(json!({
+        "summary": summary,
+        "items": items,
+        "resolved": resolved,
+        "ldap_configured": st.cfg.ldap.is_configured(),
+        "analysis_at": db::get_meta(c, "analysis_at").await?,
+    })))
+}
+
+async fn load_assist_item(c: &impl GenericClient, fingerprint: &str) -> Result<Value, ApiError> {
+    let ad_at = parse_ts(db::get_meta(c, "ad_synced_at").await?.as_deref());
+    let mut v = query_one_json(
+        c,
+        &format!("{ASSIST_SELECT} WHERE f.fingerprint = $1 LIMIT 1"),
+        &[&fingerprint],
+    )
+    .await?
+    .ok_or_else(|| ApiError::not_found("Befund (evtl. bereits behoben)"))?;
+    assist_item(&mut v, ad_at);
+    Ok(v)
+}
+
+async fn assist_detail(State(st): State<AppState>, Path(fingerprint): Path<String>) -> ApiResult {
+    let c = st.db.get().await?;
+    let c = &**c;
+    let v = load_assist_item(c, &fingerprint).await?;
+    let s = |k: &str| v[k].as_str().map(str::to_string);
+    let f = assist::FindingRef {
+        system_id: v["system_id"].as_i64(),
+        hostname: s("hostname"),
+        rule: s("rule").unwrap_or_default(),
+        title: s("title").unwrap_or_default(),
+        path: s("path"),
+        sid: s("sid"),
+    };
+    let guide = assist::guide(c, &f, &st.cfg.analysis).await?;
+    Ok(Json(json!({
+        "finding": v,
+        "rule": analysis::rule(&f.rule),
+        "guide": guide,
+    })))
+}
+
+#[derive(Deserialize)]
+struct AssistUpdate {
+    /// `fixed`, `accepted` oder `open`
+    status: String,
+    note: Option<String>,
+}
+
+async fn assist_update(
+    State(st): State<AppState>,
+    Path(fingerprint): Path<String>,
+    Json(body): Json<AssistUpdate>,
+) -> ApiResult {
+    let c = st.db.get().await?;
+    let c = &**c;
+    let note = body
+        .note
+        .map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty());
+    match body.status.as_str() {
+        "open" => {
+            c.execute(
+                "DELETE FROM finding_states WHERE fingerprint = $1",
+                &[&fingerprint],
+            )
+            .await?;
+        }
+        "fixed" | "accepted" => {
+            if body.status == "accepted" && note.is_none() {
+                return Err(ApiError::bad_request(
+                    "Für eine Ausnahme ist eine Begründung erforderlich",
+                ));
+            }
+            let v = load_assist_item(c, &fingerprint).await?;
+            c.execute(
+                "INSERT INTO finding_states (fingerprint, rule, system_id, title, status, note, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, now())
+                 ON CONFLICT (fingerprint) DO UPDATE SET status = excluded.status, note = excluded.note,
+                     title = excluded.title, updated_at = excluded.updated_at, resolved_at = NULL",
+                &[
+                    &fingerprint,
+                    &v["rule"].as_str(),
+                    &v["system_id"].as_i64(),
+                    &v["title"].as_str(),
+                    &body.status,
+                    &note,
+                ],
+            )
+            .await?;
+            info!(
+                "Audit-Assist: „{}“ als {} markiert",
+                v["title"].as_str().unwrap_or(""),
+                body.status
+            );
+        }
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "Unbekannter Status '{other}'"
+            )))
+        }
+    }
+    let v = load_assist_item(c, &fingerprint)
+        .await
+        .unwrap_or_else(|_| json!({ "assist_status": "open" }));
+    Ok(Json(v))
+}
+
+#[cfg(test)]
+mod assist_tests {
+    use super::*;
+
+    #[test]
+    fn status_verification() {
+        let t0 = chrono::Utc::now();
+        let t1 = t0 + chrono::Duration::minutes(5);
+        assert_eq!(assist_status(None, None, Some(t0)), "open");
+        assert_eq!(
+            assist_status(Some("accepted"), Some(t0), Some(t1)),
+            "accepted"
+        );
+        assert_eq!(assist_status(Some("fixed"), Some(t1), Some(t0)), "pending");
+        assert_eq!(assist_status(Some("fixed"), Some(t0), Some(t1)), "failed");
+        assert_eq!(assist_status(Some("fixed"), Some(t0), None), "pending");
+    }
 }
 
 // ---------------------------------------------------------------------------

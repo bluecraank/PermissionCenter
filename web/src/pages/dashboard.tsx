@@ -1,8 +1,9 @@
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { AlertTriangle, Building2, FolderLock, FolderTree, Server, Share2, Users } from 'lucide-react'
+import { AlertTriangle, Building2, FolderLock, FolderTree, ListChecks, Server, Share2, Users } from 'lucide-react'
 
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
@@ -26,6 +27,7 @@ export default function DashboardPage() {
 
   const chart = SEVERITIES.map((s) => ({ key: s, name: severityLabel[s], value: data.findings[s] }))
   const empty = data.totals.systems === 0
+  const openFindings = SEVERITIES.reduce((n, s) => n + data.findings[s], 0)
 
   return (
     <>
@@ -33,6 +35,15 @@ export default function DashboardPage() {
         title="Dashboard"
         description={
           data.analysis_at ? `Letzte Analyse ${relative(data.analysis_at)} (${dateTime(data.analysis_at)})` : 'Noch keine Analyse'
+        }
+        actions={
+          openFindings > 0 && (
+            <Button asChild>
+              <Link to="/assist">
+                <ListChecks className="size-4" /> {num(openFindings)} Befunde Schritt für Schritt beheben
+              </Link>
+            </Button>
+          )
         }
       />
 

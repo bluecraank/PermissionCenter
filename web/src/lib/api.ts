@@ -170,6 +170,8 @@ export interface Finding {
   affected: number
   created_at: string
   recommendation: string | null
+  fingerprint: string | null
+  assist_status: 'fixed' | 'accepted' | null
 }
 
 export interface Recommendation {
@@ -198,6 +200,7 @@ export interface AuditCheck {
   affected: number
   systems_failed: number
   systems_total: number
+  accepted: number
 }
 
 export interface Audit {
@@ -372,4 +375,58 @@ export interface ClientReleases {
   signature_required: boolean
   public_key: string | null
   systems: { id: number; hostname: string; client_version: string | null; last_seen: string; outdated: boolean }[]
+}
+
+export type AssistStatus = 'open' | 'failed' | 'pending' | 'accepted'
+
+export interface AssistItem {
+  id: number
+  fingerprint: string
+  system_id: number | null
+  hostname: string | null
+  rule: string
+  rule_title: string | null
+  severity: Severity
+  title: string
+  detail: string | null
+  path: string | null
+  sid: string | null
+  affected: number
+  status: string | null
+  note: string | null
+  updated_at: string | null
+  data_at: string | null
+  assist_status: AssistStatus
+}
+
+export interface AssistOverview {
+  summary: Record<AssistStatus | 'resolved', number>
+  items: AssistItem[]
+  resolved: {
+    fingerprint: string
+    rule: string
+    title: string
+    note: string | null
+    system_id: number | null
+    hostname: string | null
+    updated_at: string
+    resolved_at: string
+  }[]
+  ldap_configured: boolean
+  analysis_at: string | null
+}
+
+export interface AssistGuide {
+  steps: string[]
+  warning: string | null
+  objects: { label: string; info: string }[]
+  objects_total: number
+  script: { file_name: string; target: string; kind: 'change' | 'review'; body: string } | null
+  verify: string
+}
+
+export interface AssistDetail {
+  finding: AssistItem
+  rule: { id: string; title: string; description: string; recommendation: string; severity: Severity; scope: string } | null
+  guide: AssistGuide
 }

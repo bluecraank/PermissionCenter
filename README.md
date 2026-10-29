@@ -31,6 +31,7 @@ Berechtigungsanalyse für Windows-Dateiserver und Active Directory.
 | Analyse | 18 Prüfregeln, z. B. verwaiste SIDs, Schreibrechte für „Jeder“, offene Freigaben, deaktivierte/inaktive Benutzer mit Rechten, Direktberechtigungen statt AGDLP, leere/verwaiste/ungenutzte Gruppen |
 | Audit | Punktwert 0–100 und Note A–F je System, für das AD und gesamt; Checkliste bestanden/nicht bestanden |
 | Empfehlungen | Priorisierte Maßnahmen je Regel mit Aufwandsschätzung und betroffenen Systemen |
+| Audit-Assist | Führt Schritt für Schritt durch alle offenen Befunde (wichtigste zuerst): Anleitung, betroffene Objekte und ein fertiges PowerShell-Skript je Befund. Erledigte Befunde werden beim nächsten Scan bzw. AD-Abgleich automatisch bestätigt, Ausnahmen mit Begründung zählen nicht in die Bewertung |
 | Zusammenhänge | Für jeden Benutzer und jede Gruppe: direkte Zugriffe, Zugriffe über (verschachtelte) Gruppen, Mitglieder, Befunde |
 | Visualisierung | Interaktive Graphen: IT-Landschaft (Domäne → Systeme → Freigaben ↔ Gruppen), Berechtigungsstränge je System, Beziehungen je Prinzipal |
 | Betrieb | Docker Compose mit PostgreSQL, Client als Windows-Dienst oder geplante Aufgabe, signierte OTA-Updates, rotierende Logdateien |
@@ -82,6 +83,19 @@ Dabei passiert Folgendes: Die EXE kommt nach `%ProgramFiles%\PermissionCenter`. 
 | `pc-client info` | Diagnose: System, Laufwerke, Freigaben, Rechte |
 | `pc-client init-config [--out datei]` | Kommentierte Konfigurationsvorlage |
 | `pc-client export --scan latest --out report.json` | Report als JSON |
+
+## Audit-Assist
+
+Unter **Auswertung → Audit-Assist** (oder „Im Audit-Assist beheben“ an einem Befund) arbeitet man die offenen Befunde der Reihe nach ab:
+
+1. Anleitung lesen, betroffene Objekte prüfen.
+2. Das erzeugte Skript (`pc-fix-<regel>.ps1`) herunterladen und auf dem angegebenen Ziel ausführen: auf dem Dateiserver selbst bzw. für AD-Befunde auf einem Rechner mit dem RSAT-Modul `ActiveDirectory`.
+   - Ohne Parameter ist das ein **Probelauf**, der nur anzeigt, was sich ändern würde.
+   - Mit `-Apply` werden die Änderungen ausgeführt. Vorher wird der bisherige Stand gesichert: ACLs als SDDL unter `%ProgramData%\PermissionCenter\acl-backup\`, AD-Gruppen als XML/CSV unter `Dokumente\PermissionCenter-Sicherung\`. Wie man die Sicherung wiederherstellt, steht am Ende des Skripts.
+3. **Erledigt** klicken. Nach dem nächsten Scan bzw. AD-Abgleich prüft der Server, ob der Befund verschwunden ist. Ist er verschwunden, gilt er als behoben; ist er noch vorhanden, kommt er als „nicht bestätigt“ zurück in die Liste.
+4. Ist ein Befund gewollt, wählt man **Ausnahme…** und gibt eine Begründung an. Er bleibt sichtbar, zählt aber nicht mehr in Bewertung und Audit.
+
+Der Server selbst ändert nichts an Dateisystemen oder AD. Er erzeugt nur die Skripte.
 
 ## Konfiguration
 

@@ -27,7 +27,8 @@
 systems ─┬─< scans                 (Historie je Upload, Kennzahlen, Wurzeln, Fehlerliste)
          ├─< folders (system_id, local_id)  ─< aces (system_id, folder_local_id)
          ├─< shares ─< share_aces
-         └─< findings              (system_id NULL = AD-Befund)
+         └─< findings              (system_id NULL = AD-Befund, fingerprint = stabile Kennung)
+finding_states                      (Audit-Assist: fixed | accepted | resolved je fingerprint)
 principals                          (Auflösung der Clients: Name, Domäne, Art)
 ad_users, ad_groups, ad_members     (AD-Stand, wird je Abgleich ersetzt)
 meta                                (Schema-Version, AD-Domäne/SID, Zeitstempel)
@@ -69,6 +70,18 @@ Je System werden nur die Detaildaten des neuesten Scans gehalten. Das hält die 
 | `AD_DISABLED_IN_GROUPS` | Info | Deaktivierte Konten sind noch Gruppenmitglied |
 
 **Bewertung**: Strafpunkte = Σ Gewicht(Schwere) × min(3, 1 + log₁₀(betroffene Objekte)); Gewichte: Kritisch 25, Hoch 12, Mittel 5, Niedrig 1,5, Info 0. Punktwert = 100 · e^(−Strafpunkte/80). Noten: A ≥ 90, B ≥ 75, C ≥ 60, D ≥ 45, E ≥ 30, sonst F.
+
+## Audit-Assist
+
+- Die Befunde werden bei jeder Analyse neu erzeugt. Damit ein Bearbeitungsstand erhalten bleibt, bekommt jeder Befund einen `fingerprint`: SHA-256 aus Regel, System, SID und, nur bei `BROAD_WRITE`/`SHARE_OPEN`, Pfad.
+- `finding_states` speichert dazu den Status: `fixed` (als erledigt markiert), `accepted` (Ausnahme mit Begründung) oder `resolved`.
+  - Am Ende jeder Analyse wird ein `fixed`/`accepted`-Eintrag, dessen Befund verschwunden ist, zu `resolved`.
+  - Taucht ein Befund wieder auf, wird sein `resolved`-Eintrag gelöscht; der Befund ist dann wieder offen.
+- „Nicht bestätigt“ (`failed`) wird nicht gespeichert, sondern berechnet: Der Befund ist `fixed`, aber der letzte Scan des Systems bzw. der letzte AD-Abgleich ist neuer als die Markierung.
+- `assist.rs` erzeugt je Regel die Anleitung und ein PowerShell-Skript (PS 5.1-kompatibel).
+  - Einträge werden über .NET (`RemoveAccessRuleSpecific`) entfernt, weil icacls verwaiste SIDs nicht entfernen kann.
+  - Rechte werden mit `icacls /grant` gesetzt, Besitzer mit `/setowner`, Vererbung mit `/inheritance:e`.
+  - Freigaben werden mit `Grant/Revoke-SmbShareAccess` geändert, AD-Objekte mit `Remove-ADGroup`, `Disable-ADAccount` und `Remove-ADGroupMember`.
 
 ## OTA-Updates
 
