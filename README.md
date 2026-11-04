@@ -19,6 +19,8 @@ Berechtigungsanalyse für Windows-Dateiserver und Active Directory.
                                                        └────────────────┘
 ```
 
+Eine einfache Schritt-für-Schritt-Anleitung steht in [INSTALL.md](INSTALL.md).
+
 ## Funktionen
 
 | Bereich | Umfang |
