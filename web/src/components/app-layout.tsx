@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useTheme } from 'next-themes'
 import {
   Building2,
+  ScrollText,
   ClipboardCheck,
   FolderTree,
   LayoutDashboard,
@@ -55,6 +56,7 @@ const nav = [
       { to: '/systems', label: 'Systeme', icon: Server },
       { to: '/principals', label: 'Benutzer & Gruppen', icon: Users },
       { to: '/ad', label: 'Active Directory', icon: Building2 },
+      { to: '/gpo', label: 'Gruppenrichtlinien', icon: ScrollText },
       { to: '/owners', label: 'Dateneigentümer', icon: UserRoundCheck },
     ],
   },
@@ -89,6 +91,7 @@ const titles: [RegExp, string][] = [
   [/^\/principals\/.+/, 'Prinzipal'],
   [/^\/principals/, 'Benutzer & Gruppen'],
   [/^\/ad/, 'Active Directory'],
+  [/^\/gpo/, 'Gruppenrichtlinien'],
   [/^\/findings/, 'Befunde'],
   [/^\/assist/, 'Audit-Assist'],
   [/^\/changes/, 'Änderungen'],

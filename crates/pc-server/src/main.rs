@@ -14,6 +14,7 @@ mod config;
 mod db;
 mod directory;
 mod export;
+mod gpo;
 mod ingest;
 mod insights;
 mod notify;
