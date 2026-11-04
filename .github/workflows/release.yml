@@ -1,7 +1,8 @@
 # Release bei einem Tag v<Version>, z. B. v0.2.0 (muss zu Cargo.toml passen):
 #   - pc-client.exe bauen und mit dem Secret PC_SIGNING_KEY signieren (Inhalt der Datei aus
 #     „pc-server gen-signing-key“). Ohne Secret entsteht ein unsigniertes Release.
-#   - ZIP mit Client, Installationsskript, Beispielkonfiguration und release.json als GitHub-Release
+#   - ZIP mit Client, Installationsskript, Beispielkonfiguration und release.json als GitHub-Release,
+#     dazu gpo-client.exe und pc-server.exe (zum Signieren und Veröffentlichen von Client-Updates)
 #   - Server-Image nach ghcr.io/<owner>/permissioncenter-server:<version> und :latest
 #
 # Den signierten Client anschließend auf dem eigenen Server veröffentlichen (ohne privaten Schlüssel):
@@ -48,7 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Bauen
-        run: cargo build --release --locked -p pc-client -p pc-server
+        run: cargo build --release --locked -p pc-client -p gpo-client -p pc-server
 
       - name: Signieren und packen
         shell: pwsh
@@ -79,6 +80,8 @@ jobs:
           files: |
             pc-client-*.zip
             dist/release.json
+            target/release/gpo-client.exe
+            target/release/pc-server.exe
           generate_release_notes: true
           fail_on_unmatched_files: false
 

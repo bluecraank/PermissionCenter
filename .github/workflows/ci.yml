@@ -42,13 +42,19 @@ jobs:
       - name: Tests
         run: cargo test --workspace --locked
 
-      - name: Client (Release) bauen
-        run: cargo build --release --locked -p pc-client
+      - name: Clients (Release) bauen
+        run: cargo build --release --locked -p pc-client -p gpo-client
 
       - uses: actions/upload-artifact@v4
         with:
           name: pc-client-${{ github.sha }}
           path: target/release/pc-client.exe
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gpo-client-${{ github.sha }}
+          path: target/release/gpo-client.exe
           retention-days: 14
 
   docker:
