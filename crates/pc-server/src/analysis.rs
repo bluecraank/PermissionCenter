@@ -328,6 +328,22 @@ pub const RULES: &[Rule] = &[
         recommendation: "Authentifizierten Benutzern oder Domänencomputern Leserecht (ohne Übernehmen) auf die GPO geben.",
     },
     Rule {
+        id: "GPO_DUPLICATE_SETTING",
+        severity: Severity::Info,
+        scope: "ad",
+        title: "Gleiche Einstellung in mehreren GPOs",
+        description: "Dieselbe Einstellung mit identischem Wert ist in mehreren GPOs gesetzt, die auf dieselben Objekte wirken können. Eine der GPOs ist überflüssig.",
+        recommendation: "Einstellung in einer GPO bündeln und aus den übrigen entfernen.",
+    },
+    Rule {
+        id: "GPO_CONFLICTING_SETTING",
+        severity: Severity::Medium,
+        scope: "ad",
+        title: "Widersprüchliche Einstellungen in mehreren GPOs",
+        description: "Dieselbe Einstellung ist in mehreren GPOs mit unterschiedlichen Werten gesetzt, die auf dieselben Objekte wirken können. Welcher Wert gilt, hängt von der Verarbeitungsreihenfolge ab.",
+        recommendation: "Gewünschten Wert festlegen und die widersprechenden Einstellungen entfernen oder die GPOs klar trennen (Verknüpfung/Sicherheitsfilter).",
+    },
+    Rule {
         id: "GPO_VERSION_MISMATCH",
         severity: Severity::Medium,
         scope: "ad",
@@ -907,14 +923,79 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
 
     // --- Gruppenrichtlinien ---
     {
+        let dups = crate::gpo::duplicates(tx).await?;
+        for (rule, kind, label) in [
+            (
+                "GPO_DUPLICATE_SETTING",
+                "duplicate",
+                "doppelt gesetzte Einstellungen",
+            ),
+            (
+                "GPO_CONFLICTING_SETTING",
+                "conflict",
+                "widersprüchliche Einstellungen",
+            ),
+        ] {
+            let items: Vec<&serde_json::Value> = dups
+                .iter()
+                .filter(|d| d["kind"] == kind && d["overlap"] != "no")
+                .collect();
+            if items.is_empty() {
+                continue;
+            }
+            let example = |d: &&serde_json::Value| {
+                let g: Vec<&str> = d["gpos"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|x| x["gpo_name"].as_str())
+                    .collect();
+                format!("{} ({})", d["name"].as_str().unwrap_or(""), g.join(", "))
+            };
+            findings.push(Finding {
+                system_id: None,
+                rule,
+                title: format!("{} {label} in mehreren GPOs", items.len()),
+                detail: format!(
+                    "z. B.:\n{}",
+                    items
+                        .iter()
+                        .take(5)
+                        .map(example)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                ),
+                path: None,
+                sid: None,
+                affected: items.len() as i64,
+            });
+        }
+    }
+    {
         let hits = crate::gpo::hits(tx).await?;
         let map: [(&'static str, &[&str], &str); 6] = [
-            ("GPO_UNLINKED", &["unlinked", "links_disabled"], "nicht verknüpfte oder deaktiviert verknüpfte GPOs"),
+            (
+                "GPO_UNLINKED",
+                &["unlinked", "links_disabled"],
+                "nicht verknüpfte oder deaktiviert verknüpfte GPOs",
+            ),
             ("GPO_EMPTY", &["empty"], "leere GPOs"),
             ("GPO_NOBODY", &["nobody"], "GPOs ohne Anwendungsrecht"),
-            ("GPO_ORPHAN_ACE", &["orphan_sid"], "GPOs mit verwaisten Berechtigungen"),
-            ("GPO_MS16_072", &["ms16_072"], "GPOs ohne Leserecht für Computer"),
-            ("GPO_VERSION_MISMATCH", &["version_mismatch"], "GPOs mit abweichender Version"),
+            (
+                "GPO_ORPHAN_ACE",
+                &["orphan_sid"],
+                "GPOs mit verwaisten Berechtigungen",
+            ),
+            (
+                "GPO_MS16_072",
+                &["ms16_072"],
+                "GPOs ohne Leserecht für Computer",
+            ),
+            (
+                "GPO_VERSION_MISMATCH",
+                &["version_mismatch"],
+                "GPOs mit abweichender Version",
+            ),
         ];
         for (rule, codes, label) in map {
             let mut names: Vec<String> = codes
@@ -930,9 +1011,14 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
                 system_id: None,
                 rule,
                 title: format!("{} {label}", names.len()),
-                detail: format!("z. B.:
-{}", names.iter().take(8).cloned().collect::<Vec<_>>().join("
-")),
+                detail: format!(
+                    "z. B.:
+{}",
+                    names.iter().take(8).cloned().collect::<Vec<_>>().join(
+                        "
+"
+                    )
+                ),
                 path: None,
                 sid: None,
                 affected: names.len() as i64,

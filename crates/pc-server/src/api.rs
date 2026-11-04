@@ -120,6 +120,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/gpo", get(gpo_overview))
         .route("/api/v1/gpo/import", post(gpo_import))
         .route("/api/v1/gpo/search", get(gpo_search))
+        .route("/api/v1/gpo/duplicates", get(gpo_duplicates))
         .route("/api/v1/gpo/{id}", get(gpo_detail))
         .route("/api/v1/analyze", post(analyze))
         .route("/api/v1/graph", get(graph))
@@ -1551,6 +1552,15 @@ async fn gpo_import(State(st): State<AppState>, headers: HeaderMap, body: Bytes)
 async fn gpo_overview(State(st): State<AppState>) -> ApiResult {
     let c = st.db.get().await?;
     Ok(Json(crate::gpo::overview(&**c).await?))
+}
+
+async fn gpo_duplicates(State(st): State<AppState>) -> ApiResult {
+    let c = st.db.get().await?;
+    let items = crate::gpo::duplicates(&**c).await?;
+    let conflicts = items.iter().filter(|x| x["kind"] == "conflict").count();
+    Ok(Json(
+        json!({ "total": items.len(), "conflicts": conflicts, "items": items }),
+    ))
 }
 
 async fn gpo_detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult {
