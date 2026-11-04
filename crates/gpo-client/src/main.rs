@@ -18,7 +18,11 @@ use pc_common::gpo::{GpoSnapshot, GPO_SCHEMA_VERSION};
 use ureq::tls::TlsConfig;
 
 #[derive(Parser)]
-#[command(name = "gpo-client", version, about = "PermissionCenter – Gruppenrichtlinien einlesen und übertragen")]
+#[command(
+    name = "gpo-client",
+    version,
+    about = "PermissionCenter – Gruppenrichtlinien einlesen und übertragen"
+)]
 struct Cli {
     /// Adresse des PermissionCenter-Servers, z. B. https://permcenter.firma.local:8080
     #[arg(short, long, env = "PC_SERVER_URL")]
@@ -69,10 +73,19 @@ fn run() -> Result<()> {
     snap.client_version = env!("CARGO_PKG_VERSION").into();
     snap.collected_at = Some(chrono::Utc::now());
     if snap.domain.is_empty() {
-        snap.domain = snap.gpos.first().map(|g| g.domain.clone()).unwrap_or_default();
+        snap.domain = snap
+            .gpos
+            .first()
+            .map(|g| g.domain.clone())
+            .unwrap_or_default();
     }
     let settings: usize = snap.gpos.iter().map(|g| g.settings.len()).sum();
-    println!("{} GPOs, {} Einstellungen, {} Gruppen gelesen.", snap.gpos.len(), settings, snap.groups.len());
+    println!(
+        "{} GPOs, {} Einstellungen, {} Gruppen gelesen.",
+        snap.gpos.len(),
+        settings,
+        snap.groups.len()
+    );
     if snap.gpos.is_empty() {
         bail!("Keine GPOs gefunden – Upload abgebrochen.");
     }
@@ -95,7 +108,11 @@ fn run() -> Result<()> {
 
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(cli.timeout.max(10))))
-        .tls_config(TlsConfig::builder().disable_verification(cli.accept_invalid_certs).build())
+        .tls_config(
+            TlsConfig::builder()
+                .disable_verification(cli.accept_invalid_certs)
+                .build(),
+        )
         .http_status_as_error(false)
         .build()
         .into();
@@ -104,16 +121,24 @@ fn run() -> Result<()> {
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Content-Encoding", "gzip")
-        .header("User-Agent", concat!("gpo-client/", env!("CARGO_PKG_VERSION")));
+        .header(
+            "User-Agent",
+            concat!("gpo-client/", env!("CARGO_PKG_VERSION")),
+        );
     if let Some(t) = &cli.token {
         req = req.header("X-Api-Key", t);
     }
-    let mut resp = req.send(&gz[..]).with_context(|| format!("Server {url} nicht erreichbar"))?;
+    let mut resp = req
+        .send(&gz[..])
+        .with_context(|| format!("Server {url} nicht erreichbar"))?;
     if !resp.status().is_success() {
         let body = resp.body_mut().read_to_string().unwrap_or_default();
         bail!("Server antwortete mit {}: {}", resp.status(), body.trim());
     }
     let v: serde_json::Value = resp.body_mut().read_json()?;
-    println!("Übertragen: {} GPOs übernommen, {} Befunde insgesamt.", v["gpos"], v["findings"]);
+    println!(
+        "Übertragen: {} GPOs übernommen, {} Befunde insgesamt.",
+        v["gpos"], v["findings"]
+    );
     Ok(())
 }

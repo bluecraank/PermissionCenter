@@ -1,6 +1,6 @@
 use pc_common::gpo::*;
-use serde::Deserialize;
 use roxmltree::{Document, Node};
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
@@ -86,7 +86,13 @@ pub fn run_powershell(dir: &Path) -> Result<(), String> {
     bytes.extend_from_slice(PS_SCRIPT.as_bytes());
     fs::write(&script, bytes).map_err(|e| e.to_string())?;
     let out = Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
         .arg(&script)
         .arg("-Out")
         .arg(dir)
@@ -104,10 +110,16 @@ pub fn run_powershell(dir: &Path) -> Result<(), String> {
 fn read_text(path: &Path) -> Result<String, String> {
     let b = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let s = if b.starts_with(&[0xFF, 0xFE]) {
-        let u: Vec<u16> = b[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let u: Vec<u16> = b[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         String::from_utf16_lossy(&u)
     } else if b.starts_with(&[0xFE, 0xFF]) {
-        let u: Vec<u16> = b[2..].chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+        let u: Vec<u16> = b[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
         String::from_utf16_lossy(&u)
     } else if b.starts_with(&[0xEF, 0xBB, 0xBF]) {
         String::from_utf8_lossy(&b[3..]).into_owned()
@@ -118,15 +130,20 @@ fn read_text(path: &Path) -> Result<String, String> {
 }
 
 fn norm_id(s: &str) -> String {
-    s.trim().trim_matches(|c| c == '{' || c == '}').to_lowercase()
+    s.trim()
+        .trim_matches(|c| c == '{' || c == '}')
+        .to_lowercase()
 }
 
 fn child<'a, 'b>(n: Node<'a, 'b>, name: &str) -> Option<Node<'a, 'b>> {
-    n.children().find(|c| c.is_element() && c.tag_name().name() == name)
+    n.children()
+        .find(|c| c.is_element() && c.tag_name().name() == name)
 }
 
 fn text_of(n: Node, name: &str) -> String {
-    child(n, name).map(|c| c.text().unwrap_or("").trim().to_string()).unwrap_or_default()
+    child(n, name)
+        .map(|c| c.text().unwrap_or("").trim().to_string())
+        .unwrap_or_default()
 }
 
 fn has_elem_children(n: Node) -> bool {
@@ -142,7 +159,17 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-const NAME_KEYS: &[&str] = &["Name", "KeyName", "DisplayName", "Path", "Command", "Action", "SettingName", "Setting", "FilterName"];
+const NAME_KEYS: &[&str] = &[
+    "Name",
+    "KeyName",
+    "DisplayName",
+    "Path",
+    "Command",
+    "Action",
+    "SettingName",
+    "Setting",
+    "FilterName",
+];
 const SKIP_KEYS: &[&str] = &["Explain", "Supported", "Comment"];
 
 fn walk(n: Node, ctx: &mut Vec<String>, scope: &str, area: &str, out: &mut Vec<GpoSetting>) {
@@ -160,7 +187,12 @@ fn walk(n: Node, ctx: &mut Vec<String>, scope: &str, area: &str, out: &mut Vec<G
     if !leaves.is_empty() {
         let own = NAME_KEYS
             .iter()
-            .find_map(|k| leaves.iter().find(|(lk, _)| lk == k).map(|(_, v)| v.clone()))
+            .find_map(|k| {
+                leaves
+                    .iter()
+                    .find(|(lk, _)| lk == k)
+                    .map(|(_, v)| v.clone())
+            })
             .unwrap_or_else(|| n.tag_name().name().to_string());
         let mut full = ctx.clone();
         full.push(own.clone());
@@ -180,7 +212,10 @@ fn walk(n: Node, ctx: &mut Vec<String>, scope: &str, area: &str, out: &mut Vec<G
             pushed = true;
         }
     }
-    for c in n.children().filter(|c| c.is_element() && has_elem_children(*c)) {
+    for c in n
+        .children()
+        .filter(|c| c.is_element() && has_elem_children(*c))
+    {
         walk(c, ctx, scope, area, out);
     }
     if pushed {
@@ -189,10 +224,17 @@ fn walk(n: Node, ctx: &mut Vec<String>, scope: &str, area: &str, out: &mut Vec<G
 }
 
 fn extract_settings(scope_node: Node, scope: &str, out: &mut Vec<GpoSetting>) {
-    for ed in scope_node.children().filter(|c| c.is_element() && c.tag_name().name() == "ExtensionData") {
+    for ed in scope_node
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().name() == "ExtensionData")
+    {
         let area = {
             let n = text_of(ed, "Name");
-            if n.is_empty() { "Unbekannt".to_string() } else { n }
+            if n.is_empty() {
+                "Unbekannt".to_string()
+            } else {
+                n
+            }
         };
         if let Some(ext) = child(ed, "Extension") {
             let mut ctx = Vec::new();
@@ -214,9 +256,14 @@ pub fn load(dir: &Path) -> Result<GpoSnapshot, String> {
     let pf: RawPermFile = serde_json::from_str(perm_text.trim_start_matches('\u{feff}'))
         .map_err(|e| format!("perms.json ungueltig: {e}"))?;
 
-    let mut ds = GpoSnapshot { groups: pf.groups.clone(), ..Default::default() };
+    let mut ds = GpoSnapshot {
+        groups: pf.groups.clone(),
+        ..Default::default()
+    };
 
-    for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "GPO" && child(*n, "Identifier").is_some()) {
+    for n in doc.descendants().filter(|n| {
+        n.is_element() && n.tag_name().name() == "GPO" && child(*n, "Identifier").is_some()
+    }) {
         let ident = child(n, "Identifier").unwrap();
         let id = norm_id(&text_of(ident, "Identifier"));
         let mut g = GpoItem {
@@ -236,7 +283,11 @@ pub fn load(dir: &Path) -> Result<GpoSnapshot, String> {
         for (scope, label) in [("Computer", "Computer"), ("User", "Benutzer")] {
             if let Some(sn) = child(n, scope) {
                 let enabled = text_of(sn, "Enabled").eq_ignore_ascii_case("true");
-                let ver = format!("AD {} / SYSVOL {}", text_of(sn, "VersionDirectory"), text_of(sn, "VersionSysvol"));
+                let ver = format!(
+                    "AD {} / SYSVOL {}",
+                    text_of(sn, "VersionDirectory"),
+                    text_of(sn, "VersionSysvol")
+                );
                 if scope == "Computer" {
                     g.computer_enabled = enabled;
                     g.computer_version = ver;
@@ -247,7 +298,10 @@ pub fn load(dir: &Path) -> Result<GpoSnapshot, String> {
                 extract_settings(sn, label, &mut g.settings);
             }
         }
-        for l in n.children().filter(|c| c.is_element() && c.tag_name().name() == "LinksTo") {
+        for l in n
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().name() == "LinksTo")
+        {
             g.links.push(GpoLink {
                 som_name: text_of(l, "SOMName"),
                 som_path: text_of(l, "SOMPath"),
@@ -275,6 +329,7 @@ pub fn load(dir: &Path) -> Result<GpoSnapshot, String> {
         }
         ds.gpos.push(g);
     }
-    ds.gpos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    ds.gpos
+        .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(ds)
 }

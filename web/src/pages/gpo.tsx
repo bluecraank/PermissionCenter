@@ -83,6 +83,26 @@ interface SearchResult {
   rows: { gpo_id: string; gpo_name: string; scope: string; area: string; name: string; detail: string }[]
 }
 
+interface DuplicateItem {
+  scope: string
+  area: string
+  name: string
+  kind: 'duplicate' | 'conflict'
+  overlap: 'no' | 'maybe' | 'yes'
+  gpos: { gpo_id: string; gpo_name: string; detail: string; links: string[] }[]
+}
+interface DuplicatesResult {
+  total: number
+  conflicts: number
+  items: DuplicateItem[]
+}
+
+const OVERLAP = {
+  yes: { label: 'Überlappung: ja', cls: 'text-sev-high border-sev-high/50' },
+  maybe: { label: 'Überlappung: möglich', cls: 'text-sev-medium border-sev-medium/50' },
+  no: { label: 'Überlappung: nein', cls: 'text-muted-foreground' },
+} as const
+
 const KIND = {
   broad: { label: 'Alle / breit', cls: '' },
   targeted: { label: 'Gezielt zugewiesen', cls: 'text-ok border-ok/40' },
@@ -217,6 +237,7 @@ export default function GpoPage() {
         <TabsList>
           <TabsTrigger value="list">GPOs</TabsTrigger>
           <TabsTrigger value="settings">Einstellungssuche</TabsTrigger>
+          <TabsTrigger value="duplicates">Doppelt / Konflikte</TabsTrigger>
           <TabsTrigger value="targets">Zuweisungen</TabsTrigger>
           <TabsTrigger value="matrix">Berechtigungsmatrix</TabsTrigger>
           <TabsTrigger value="tree">Verknüpfungen</TabsTrigger>
@@ -226,6 +247,9 @@ export default function GpoPage() {
         </TabsContent>
         <TabsContent value="settings">
           <SettingsTab open={setOpenId} />
+        </TabsContent>
+        <TabsContent value="duplicates">
+          <DuplicatesTab open={setOpenId} />
         </TabsContent>
         <TabsContent value="targets">
           <TargetsTab gpos={gpos} groups={data.groups} open={setOpenId} />
@@ -426,6 +450,78 @@ function SettingsTab({ open }: { open: (id: string) => void }) {
             </TableBody>
           </Table>
         </Card>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Doppelte und widersprüchliche Einstellungen
+
+function DuplicatesTab({ open }: { open: (id: string) => void }) {
+  const [kind, setKind] = useState('all')
+  const [onlyOverlap, setOnlyOverlap] = useState(true)
+  const { data, error, isLoading } = useQuery({
+    queryKey: ['gpo-duplicates'],
+    queryFn: () => api.get<DuplicatesResult>('/gpo/duplicates'),
+  })
+  if (error) return <ErrorState error={error} />
+  if (isLoading || !data) return <Loading rows={4} />
+  const items = data.items.filter((d) => (kind === 'all' || d.kind === kind) && (!onlyOverlap || d.overlap !== 'no'))
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <Select value={kind} onValueChange={setKind}>
+          <SelectTrigger className="w-48">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle</SelectItem>
+            <SelectItem value="conflict">Konflikte</SelectItem>
+            <SelectItem value="duplicate">Duplikate</SelectItem>
+          </SelectContent>
+        </Select>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={onlyOverlap} onChange={(e) => setOnlyOverlap(e.target.checked)} />
+          nur überlappende
+        </label>
+        <span className="text-muted-foreground text-sm">
+          {num(items.length)} von {num(data.total)} Einstellungen ({num(data.conflicts)} Konflikte gesamt)
+        </span>
+      </div>
+      {items.length === 0 ? (
+        <EmptyState title="Keine Treffer">Für diese Auswahl gibt es keine mehrfach gesetzten Einstellungen.</EmptyState>
+      ) : (
+        items.map((d) => (
+          <Card key={`${d.scope}|${d.area}|${d.name}`} className="gap-2 py-3">
+            <CardHeader className="px-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <CardTitle className="text-sm break-words">{d.name}</CardTitle>
+                <Badge variant="outline" className={d.kind === 'conflict' ? 'text-sev-high border-sev-high/50' : ''}>
+                  {d.kind === 'conflict' ? 'Konflikt' : 'Duplikat'}
+                </Badge>
+                <Badge variant="outline" className={OVERLAP[d.overlap].cls}>
+                  {OVERLAP[d.overlap].label}
+                </Badge>
+              </div>
+              <div className="text-muted-foreground text-xs">
+                {d.scope} / {d.area}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-1 px-2">
+              {d.gpos.map((g) => (
+                <button
+                  key={g.gpo_id}
+                  onClick={() => open(g.gpo_id)}
+                  className="hover:bg-accent/50 flex w-full flex-col gap-0.5 rounded px-2 py-1 text-left text-sm sm:flex-row sm:gap-3"
+                >
+                  <span className="shrink-0 font-medium sm:w-64 sm:truncate">{g.gpo_name}</span>
+                  <span className="text-muted-foreground min-w-0 font-mono text-xs break-words">{g.detail}</span>
+                </button>
+              ))}
+            </CardContent>
+          </Card>
+        ))
       )}
     </div>
   )
