@@ -155,13 +155,13 @@ Beide Programme nutzen TOML-Dateien: `schlüssel = wert`, Abschnitte und Komment
    # Version in Cargo.toml ([workspace.package] version) erhöhen, CHANGELOG pflegen
    cargo build --release -p pc-client -p pc-server
    .\target\release\pc-server.exe publish-client `
-       --file .\target\release\pc-client.exe --version 0.3.0 `
+       --file .\target\release\pc-client.exe --version 0.3.1 `
        --signing-key C:\Sicher\permcenter-signing.key `
        --server http://permcenter:8080 --token <ein Wert aus PC_API_TOKENS> --notes "…"
    ```
    Ohne `--server` legt `publish-client` das Release im lokalen `client_releases_dir` ab (z. B. direkt auf dem Server).
    Liegt die Signatur schon vor (z. B. aus der `release.json` eines GitHub-Releases), genügt `--signature <Base64>` statt `--signing-key`.
-   Rohe API: `POST /api/v1/client/releases?version=0.3.0&signature=…` mit `X-Api-Key` und der EXE als Body.
+   Rohe API: `POST /api/v1/client/releases?version=0.3.1&signature=…` mit `X-Api-Key` und der EXE als Body.
 
 Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ein Update installiert wird, müssen **Größe, SHA-256 und Ed25519-Signatur** stimmen; die Signatur deckt Version und Inhalt gemeinsam ab, ein Downgrade mit einer alten Signatur ist also nicht möglich. Danach tauscht der Client seine EXE aus und startet neu. Der Dienst beendet sich dazu mit Code 10, die Dienst-Wiederherstellung startet ihn wieder. Ohne `public_key` verweigert der Client Updates, solange `require_signature = true` gilt (Standard).
 
@@ -174,7 +174,7 @@ Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ei
   - Es schiebt das Server-Image nach `ghcr.io/<owner>/permissioncenter-server:<version>`.
 - Danach den Client auf dem eigenen Server bereitstellen:
   ```powershell
-  .\pc-server.exe publish-client --file .\pc-client.exe --version 0.3.0 `
+  .\pc-server.exe publish-client --file .\pc-client.exe --version 0.3.1 `
       --signature <signature aus release.json> --server http://permcenter:8080 --token <API-Token>
   ```
 

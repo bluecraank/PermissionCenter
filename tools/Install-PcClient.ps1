@@ -97,7 +97,9 @@ icacls $dataDir /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI
 icacls $installDir /grant '*S-1-5-18:(OI)(CI)F' | Out-Null
 
 if (-not (Test-Path $config)) {
-    $text = Invoke-PcClient init-config | Out-String
+    # Über eine Datei statt stdout: PowerShell 5.1 läse UTF-8 sonst in der Konsolen-Codepage
+    Invoke-PcClient init-config --out $config --force | Out-Null
+    $text = [System.IO.File]::ReadAllText($config, [System.Text.Encoding]::UTF8)
     $text = $text -replace '(?m)^# url = .*$', "url = `"$ServerUrl`""
     if ($ApiToken) { $text = $text -replace '(?m)^# api_token = .*$', "api_token = `"$ApiToken`"" }
     if ($PublicKey) { $text = $text -replace '(?m)^# public_key = .*$', "public_key = `"$PublicKey`"" }

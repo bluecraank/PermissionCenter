@@ -7,6 +7,11 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-04
+
+### Behoben
+- `Install-PcClient.ps1`: Umlaute in der erzeugten `pc-client.toml` waren unter Windows PowerShell 5.1 kaputt, weil die Vorlage in der Konsolen-Codepage eingelesen wurde
+
 ## [0.3.0] - 2026-11-04
 
 ### Hinzugefügt
