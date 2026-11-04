@@ -288,6 +288,54 @@ pub const RULES: &[Rule] = &[
         recommendation: "Konten deaktivieren und nach einer Karenzzeit löschen.",
     },
     Rule {
+        id: "GPO_UNLINKED",
+        severity: Severity::Low,
+        scope: "ad",
+        title: "Nicht verknüpfte Gruppenrichtlinien",
+        description: "GPOs ohne aktive Verknüpfung mit Domäne, OU oder Site werden nie angewendet und sind Altlasten.",
+        recommendation: "Prüfen, ob die GPO noch gebraucht wird; sonst sichern und löschen.",
+    },
+    Rule {
+        id: "GPO_EMPTY",
+        severity: Severity::Info,
+        scope: "ad",
+        title: "Leere Gruppenrichtlinien",
+        description: "GPOs ohne jede Einstellung erhöhen nur den Verwaltungsaufwand.",
+        recommendation: "Leere GPOs löschen oder mit der vorgesehenen Konfiguration füllen.",
+    },
+    Rule {
+        id: "GPO_NOBODY",
+        severity: Severity::Low,
+        scope: "ad",
+        title: "GPO wirkt auf niemanden",
+        description: "Kein Benutzer, keine Gruppe und kein Computer hat das Recht „Gruppenrichtlinie übernehmen“ – die GPO ist wirkungslos.",
+        recommendation: "Sicherheitsfilterung korrigieren (z. B. Authentifizierte Benutzer oder die vorgesehene Gruppe hinzufügen) oder GPO löschen.",
+    },
+    Rule {
+        id: "GPO_ORPHAN_ACE",
+        severity: Severity::Low,
+        scope: "ad",
+        title: "Verwaiste Berechtigungen auf GPOs",
+        description: "Auf GPOs stehen Berechtigungen für Konten, die nicht mehr aufgelöst werden können.",
+        recommendation: "Verwaiste Einträge in der Delegierung der GPO entfernen.",
+    },
+    Rule {
+        id: "GPO_MS16_072",
+        severity: Severity::Medium,
+        scope: "ad",
+        title: "GPO nicht für Computerkonten lesbar (MS16-072)",
+        description: "Bei gezielt zugewiesenen GPOs mit Benutzereinstellungen fehlt das Leserecht für Authentifizierte Benutzer bzw. Domänencomputer; die Einstellungen können nicht geladen werden.",
+        recommendation: "Authentifizierten Benutzern oder Domänencomputern Leserecht (ohne Übernehmen) auf die GPO geben.",
+    },
+    Rule {
+        id: "GPO_VERSION_MISMATCH",
+        severity: Severity::Medium,
+        scope: "ad",
+        title: "GPO-Version in AD und SYSVOL weicht ab",
+        description: "Die Versionsnummern im Active Directory und in SYSVOL unterscheiden sich – meist ein Replikationsproblem (DFSR).",
+        recommendation: "Replikation von SYSVOL und AD prüfen (dcdiag, repadmin /replsummary, DFSR-Status).",
+    },
+    Rule {
         id: "AD_DISABLED_IN_GROUPS",
         severity: Severity::Info,
         scope: "ad",
@@ -855,6 +903,41 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
             });
         }
         ad_account_checks(&dir, cfg, &mut findings, &mut push_ad);
+    }
+
+    // --- Gruppenrichtlinien ---
+    {
+        let hits = crate::gpo::hits(tx).await?;
+        let map: [(&'static str, &[&str], &str); 6] = [
+            ("GPO_UNLINKED", &["unlinked", "links_disabled"], "nicht verknüpfte oder deaktiviert verknüpfte GPOs"),
+            ("GPO_EMPTY", &["empty"], "leere GPOs"),
+            ("GPO_NOBODY", &["nobody"], "GPOs ohne Anwendungsrecht"),
+            ("GPO_ORPHAN_ACE", &["orphan_sid"], "GPOs mit verwaisten Berechtigungen"),
+            ("GPO_MS16_072", &["ms16_072"], "GPOs ohne Leserecht für Computer"),
+            ("GPO_VERSION_MISMATCH", &["version_mismatch"], "GPOs mit abweichender Version"),
+        ];
+        for (rule, codes, label) in map {
+            let mut names: Vec<String> = codes
+                .iter()
+                .flat_map(|c| hits.get(*c).cloned().unwrap_or_default())
+                .collect();
+            names.sort();
+            names.dedup();
+            if names.is_empty() {
+                continue;
+            }
+            findings.push(Finding {
+                system_id: None,
+                rule,
+                title: format!("{} {label}", names.len()),
+                detail: format!("z. B.:
+{}", names.iter().take(8).cloned().collect::<Vec<_>>().join("
+")),
+                path: None,
+                sid: None,
+                affected: names.len() as i64,
+            });
+        }
     }
 
     // --- Speichern ---

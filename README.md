@@ -37,6 +37,7 @@ Berechtigungsanalyse für Windows-Dateiserver und Active Directory.
 | Zugriffsprüfung | „Wer hat Zugriff auf `\\FS01\Daten\Vertrieb`?“ – Gruppen werden bis zum einzelnen Benutzer aufgelöst, inkl. Freigabeberechtigungen und Dateneigentümer |
 | Dateneigentümer | Fachlich verantwortliche Person je Ordner (gilt für Unterordner), sichtbar in Zugriffsprüfung und Exporten |
 | Berichte und Exporte | Audit-Bericht und Zugriffsbericht je Person zum Drucken bzw. als PDF; CSV (Excel) für Befunde, Audit, Berechtigungen, Änderungen, Zugriffe |
+| Gruppenrichtlinien | Eigener Client `gpo-client` (auf einem DC) liest alle GPOs: Einstellungen, Verknüpfungen, Berechtigungen. Die Weboberfläche zeigt sie unter *Gruppenrichtlinien*: durchsuchbare Einstellungen, gezielt zugewiesene GPOs (Sicherheitsfilterung, inkl. Gruppenmitglieder), Berechtigungsmatrix, Verknüpfungsbaum. 6 Prüfregeln (`GPO_*`: nicht verknüpft, leer, wirkungslos, verwaiste Berechtigungen, MS16-072, AD/SYSVOL-Version) fließen in Befunde und Audit ein |
 | Zusammenhänge | Für jeden Benutzer und jede Gruppe: direkte Zugriffe, Zugriffe über (verschachtelte) Gruppen, Mitglieder, Befunde |
 | Visualisierung | Interaktive Graphen: IT-Landschaft (Domäne → Systeme → Freigaben ↔ Gruppen), Berechtigungsstränge je System, Beziehungen je Prinzipal |
 | Betrieb | Docker Compose mit PostgreSQL, Client als Windows-Dienst oder geplante Aufgabe, „Jetzt scannen“ aus der Weboberfläche, signierte OTA-Updates, rotierende Logdateien, CI/Release über GitHub Actions |
@@ -57,6 +58,18 @@ Variante 2 (Export auf einem DC):
 ```powershell
 .\tools\Export-ADData.ps1 -Server http://<docker-host>:8080
 ```
+
+## GPOs einlesen (gpo-client)
+
+Auf einem Domänencontroller (oder Rechner mit RSAT-GPMC) als Administrator:
+
+```powershell
+.\gpo-client.exe --server https://permcenter.firma.local:8080 --token <token>
+# nur lokal ansehen/speichern: --dry-run --out gpos.json
+# als geplante Aufgabe z. B. täglich; Server/Token alternativ über PC_SERVER_URL / PC_API_TOKEN
+```
+
+Der Client ruft `Get-GPOReport`, `Get-GPPermission` und (für Gruppenmitglieder) `Get-ADGroupMember` per PowerShell ab, wertet die Daten aus und sendet sie an `POST /api/v1/gpo/import`. Jeder Upload ersetzt den bisherigen GPO-Stand und löst die Analyse neu aus.
 
 ## Client installieren
 

@@ -117,6 +117,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/ad/groups", get(ad_groups))
         .route("/api/v1/ad/sync", post(ad_sync))
         .route("/api/v1/ad/import", post(ad_import))
+        .route("/api/v1/gpo", get(gpo_overview))
+        .route("/api/v1/gpo/import", post(gpo_import))
+        .route("/api/v1/gpo/search", get(gpo_search))
+        .route("/api/v1/gpo/{id}", get(gpo_detail))
         .route("/api/v1/analyze", post(analyze))
         .route("/api/v1/graph", get(graph))
         .route("/api/v1/client/latest", get(client_latest))
@@ -1521,6 +1525,62 @@ async fn ad_import(State(st): State<AppState>, body: Bytes) -> ApiResult {
     let snap: AdSnapshot = serde_json::from_slice(body)
         .map_err(|e| ApiError::bad_request(format!("AD-Export ungültig: {e}")))?;
     Ok(Json(store_and_analyze(&st, snap, "import").await?))
+}
+
+// ---------------------------------------------------------------------------
+// Gruppenrichtlinien
+
+async fn gpo_import(State(st): State<AppState>, headers: HeaderMap, body: Bytes) -> ApiResult {
+    check_token(&st, &headers)?;
+    let snap: pc_common::gpo::GpoSnapshot = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::bad_request(format!("GPO-Export ungültig: {e}")))?;
+    if snap.gpos.is_empty() {
+        return Err(ApiError::bad_request("Der GPO-Export enthält keine GPOs"));
+    }
+    let mut client = st.db.get().await?;
+    let tx = client.transaction().await?;
+    let n = crate::gpo::store(&tx, &snap).await?;
+    let a = analysis::run(&tx, &st.cfg.analysis).await?;
+    tx.commit().await?;
+    let v = json!({ "gpos": n, "findings": a.findings });
+    crate::notify::after_analysis(st.clone(), a);
+    info!("GPOs von {} übernommen: {v}", snap.host);
+    Ok(Json(v))
+}
+
+async fn gpo_overview(State(st): State<AppState>) -> ApiResult {
+    let c = st.db.get().await?;
+    Ok(Json(crate::gpo::overview(&**c).await?))
+}
+
+async fn gpo_detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult {
+    let c = st.db.get().await?;
+    crate::gpo::detail(&**c, &id)
+        .await?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("GPO"))
+}
+
+#[derive(Deserialize)]
+struct GpoSearchQuery {
+    q: Option<String>,
+    scope: Option<String>,
+    area: Option<String>,
+    limit: Option<usize>,
+}
+
+async fn gpo_search(State(st): State<AppState>, Query(q): Query<GpoSearchQuery>) -> ApiResult {
+    let c = st.db.get().await?;
+    Ok(Json(
+        crate::gpo::search(
+            &**c,
+            q.q.as_deref().unwrap_or(""),
+            q.scope.as_deref().unwrap_or(""),
+            q.area.as_deref().unwrap_or(""),
+            q.limit.unwrap_or(500).min(2000),
+        )
+        .await?,
+    ))
 }
 
 // ---------------------------------------------------------------------------

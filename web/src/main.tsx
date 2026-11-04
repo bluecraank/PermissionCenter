@@ -22,6 +22,7 @@ import { AuditReportPage, PrincipalReportPage } from '@/pages/reports'
 import PrincipalsPage from '@/pages/principals'
 import PrincipalDetailPage from '@/pages/principal-detail'
 import AdPage from '@/pages/active-directory'
+import GpoPage from '@/pages/gpo'
 import LandscapePage from '@/pages/landscape'
 import SettingsPage from '@/pages/settings'
 import NotFoundPage from '@/pages/not-found'
@@ -47,6 +48,7 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="principals" element={<PrincipalsPage />} />
                 <Route path="principals/:sid" element={<PrincipalDetailPage />} />
                 <Route path="ad" element={<AdPage />} />
+                <Route path="gpo" element={<GpoPage />} />
                 <Route path="findings" element={<FindingsPage />} />
                 <Route path="audit" element={<AuditPage />} />
                 <Route path="assist" element={<AssistPage />} />

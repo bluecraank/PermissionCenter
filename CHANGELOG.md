@@ -7,6 +7,11 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+### Hinzugefügt
+- **GPO-Client** (`gpo-client`): liest auf einem Domänencontroller alle Gruppenrichtlinien (Einstellungen, Verknüpfungen, Berechtigungen, Gruppenmitglieder) und überträgt sie per `POST /api/v1/gpo/import`
+- **Gruppenrichtlinien** in der Weboberfläche: GPO-Liste mit Filtern und Detailansicht, Einstellungssuche über alle GPOs, gezielt zugewiesene GPOs (Sicherheitsfilterung), Berechtigungsmatrix, Verknüpfungsbaum
+- Prüfregeln `GPO_UNLINKED`, `GPO_EMPTY`, `GPO_NOBODY`, `GPO_ORPHAN_ACE`, `GPO_MS16_072`, `GPO_VERSION_MISMATCH` (Schema-Version 4)
+
 ## [0.2.0] - 2026-10-29
 
 ### Hinzugefügt

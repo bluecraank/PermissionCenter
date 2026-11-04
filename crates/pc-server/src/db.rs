@@ -13,7 +13,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{GenericClient, NoTls, Row};
 use tracing::{info, warn};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -295,6 +295,9 @@ async fn migrate(c: &Object) -> Result<()> {
     c.batch_execute(SCHEMA)
         .await
         .context("Schema konnte nicht angelegt werden")?;
+    c.batch_execute(crate::gpo::SCHEMA)
+        .await
+        .context("GPO-Schema konnte nicht angelegt werden")?;
     let current: Option<i64> = get_meta(&***c, "schema_version")
         .await?
         .and_then(|v| v.parse().ok());

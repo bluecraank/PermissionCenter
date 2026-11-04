@@ -3,6 +3,7 @@
 //! Der [`model::ScanReport`] ist der Vertrag zwischen beiden Seiten. Änderungen
 //! am Format erhöhen [`model::REPORT_SCHEMA_VERSION`].
 
+pub mod gpo;
 pub mod model;
 pub mod release;
 pub mod rights;
