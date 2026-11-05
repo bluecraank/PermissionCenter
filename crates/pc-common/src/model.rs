@@ -31,6 +31,17 @@ pub struct ScanReport {
     /// Direkte Mitglieder der lokalen Gruppe Administratoren (S-1-5-32-544).
     #[serde(default)]
     pub local_admins: Option<Vec<PrincipalInfo>>,
+    /// Registry-Werte aus dem Schwachstellen-Katalog; ältere Clients melden sie nicht.
+    #[serde(default)]
+    pub security_settings: Option<Vec<SecuritySetting>>,
+}
+
+/// Ein vorhandener Registry-Wert unter HKLM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SecuritySetting {
+    pub key: String,
+    pub name: String,
+    pub value: String,
 }
 
 /// Datei, deren Berechtigungen vom Ordner abweichen (eigene ACEs oder unterbrochene Vererbung).
@@ -309,6 +320,12 @@ pub struct AdSnapshot {
     pub users: Vec<AdUser>,
     #[serde(default)]
     pub groups: Vec<AdGroup>,
+    /// `ms-DS-MachineAccountQuota` der Domäne.
+    #[serde(default)]
+    pub machine_account_quota: Option<i64>,
+    /// Berechtigungen an AD-Objekten; leer, wenn sie nicht erfasst wurden.
+    #[serde(default)]
+    pub acl_objects: Vec<crate::adacl::AdAclObject>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -336,6 +353,9 @@ pub struct AdUser {
     /// Dienstprinzipalnamen (SPN) – bei Benutzerkonten Ziel für Kerberoasting.
     #[serde(default)]
     pub service_principal_names: Vec<String>,
+    /// Rohwert von `userAccountControl`.
+    #[serde(default)]
+    pub user_account_control: Option<u32>,
     /// SIDs der Gruppen, in denen das Konto direkt Mitglied ist.
     #[serde(default)]
     pub member_of: Vec<String>,

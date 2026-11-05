@@ -9,6 +9,49 @@ export interface Score {
   penalty: number
 }
 
+export interface AttackNode {
+  id: string
+  name: string
+  kind: string
+  principal: Principal | null
+  dn: string | null
+  tier0: boolean
+}
+
+export interface AttackPathStep {
+  from: AttackNode
+  edge: string
+  label: string
+  to: AttackNode
+}
+
+export interface AttackEntry {
+  trustee: AttackNode
+  target: AttackNode
+  rights: { id: string; label: string }[]
+  rule: string
+  severity: Severity | null
+  broad: boolean
+  exposed_users: number
+  hops: number
+  path: AttackPathStep[]
+}
+
+export interface AttackPathOverview {
+  collected: boolean
+  ad_loaded: boolean
+  objects: number
+  stats: { entries: number; dcsync: number; broad: number; exposed_users: number; total_users: number; tier0: number }
+  entries: AttackEntry[]
+  tier0: AttackNode[]
+}
+
+export interface PrincipalAttackPath {
+  collected: boolean
+  tier0: boolean
+  path: AttackPathStep[]
+}
+
 export interface SystemSummary {
   id: number
   hostname: string
@@ -172,6 +215,27 @@ export interface Finding {
   recommendation: string | null
   fingerprint: string | null
   assist_status: 'fixed' | 'accepted' | null
+  weakness?: { id: string; title: string; why: string } | null
+}
+
+export interface WeaknessItem {
+  id: string
+  category: string
+  severity: Severity
+  title: string
+  why: string
+  fix: string
+  status: 'found' | 'ok' | 'unchecked' | 'manual'
+  sources: string[]
+  findings: { title: string; detail: string | null; hostname: string | null; fingerprint: string | null; system_id: number | null; assist_status: string | null }[]
+}
+
+export interface WeaknessOverview {
+  systems_total: number
+  systems_reported: number
+  gpos: number
+  ad_loaded: boolean
+  items: WeaknessItem[]
 }
 
 export interface Recommendation {

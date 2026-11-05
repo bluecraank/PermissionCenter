@@ -18,6 +18,8 @@ import AssistPage from '@/pages/assist'
 import ChangesPage from '@/pages/changes'
 import AccessPage from '@/pages/access'
 import OwnersPage from '@/pages/owners'
+import AttackPathsPage from '@/pages/attack-paths'
+import WeaknessesPage from '@/pages/weaknesses'
 import { AuditReportPage, PrincipalReportPage } from '@/pages/reports'
 import PrincipalsPage from '@/pages/principals'
 import PrincipalDetailPage from '@/pages/principal-detail'
@@ -55,6 +57,8 @@ createRoot(document.getElementById('root')!).render(
                 <Route path="changes" element={<ChangesPage />} />
                 <Route path="access" element={<AccessPage />} />
                 <Route path="owners" element={<OwnersPage />} />
+                <Route path="attack-paths" element={<AttackPathsPage />} />
+                <Route path="weaknesses" element={<WeaknessesPage />} />
                 <Route path="recommendations" element={<RecommendationsPage />} />
                 <Route path="settings" element={<SettingsPage />} />
                 <Route path="*" element={<NotFoundPage />} />

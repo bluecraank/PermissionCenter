@@ -19,7 +19,8 @@ import {
   StatusBadge,
 } from '@/components/common'
 import { GraphLegend, GraphView } from '@/components/graph-view'
-import { api, type AccessEntry, type GraphData, type GraphNode, type PrincipalDetail } from '@/lib/api'
+import { AttackPathChain } from '@/pages/attack-paths'
+import { api, type AccessEntry, type GraphData, type GraphNode, type PrincipalAttackPath, type PrincipalDetail } from '@/lib/api'
 import { dateTime, kindLabel, num } from '@/lib/format'
 
 export default function PrincipalDetailPage() {
@@ -28,6 +29,10 @@ export default function PrincipalDetailPage() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['principal', sid],
     queryFn: () => api.get<PrincipalDetail>(`/principals/${encodeURIComponent(sid)}`),
+  })
+  const attack = useQuery({
+    queryKey: ['attack-path', sid],
+    queryFn: () => api.get<PrincipalAttackPath>(`/attack-paths/principal/${encodeURIComponent(sid)}`),
   })
   const graph = useQuery({
     queryKey: ['graph', 'principal', sid],
@@ -122,6 +127,17 @@ export default function PrincipalDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {attack.data && attack.data.path.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Kürzester Angriffspfad zur Domänenkontrolle</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AttackPathChain steps={attack.data.path} />
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="access">
         <TabsList>

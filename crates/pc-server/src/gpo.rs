@@ -265,7 +265,14 @@ pub async fn detail(c: &impl GenericClient, id: &str) -> Result<Option<Value>> {
         return Ok(None);
     };
     let mut data: Value = r.get(0);
-    data["settings"] = r.get(1);
+    let mut settings: Value = r.get(1);
+    for s in settings.as_array_mut().into_iter().flatten() {
+        s["weakness"] = crate::weakness::gpo_hint(
+            s["name"].as_str().unwrap_or(""),
+            s["detail"].as_str().unwrap_or(""),
+        );
+    }
+    data["settings"] = settings;
     Ok(Some(data))
 }
 
@@ -329,6 +336,10 @@ pub async fn search(
             if out.len() < limit {
                 out.push(json!({
                     "gpo_id": id, "gpo_name": name,
+                    "weakness": crate::weakness::gpo_hint(
+                        s["name"].as_str().unwrap_or(""),
+                        s["detail"].as_str().unwrap_or(""),
+                    ),
                     "scope": s["scope"], "area": s["area"], "name": s["name"], "detail": s["detail"]
                 }));
             }
@@ -365,9 +376,11 @@ pub async fn hits(c: &impl GenericClient) -> Result<BTreeMap<String, Vec<String>
 pub struct Lite {
     pub id: String,
     pub name: String,
-    pub links: Vec<(String, bool)>,
+    /// Pfad, aktiv, erzwungen
+    pub links: Vec<(String, bool, bool)>,
     pub kind: String,
     pub apply_sids: Vec<String>,
+    pub apply_names: Vec<String>,
     pub settings: Vec<(String, String, String, String)>, // scope, area, name, detail
 }
 
@@ -406,6 +419,131 @@ fn overlap(a: &Lite, b: &Lite) -> u8 {
     2
 }
 
+fn active_paths(g: &Lite) -> BTreeSet<String> {
+    g.links
+        .iter()
+        .filter(|l| l.1)
+        .map(|l| l.0.to_lowercase())
+        .collect()
+}
+
+/// Vergleich der Verknüpfungen: 3 = gleich, 2 = teilweise gleich, 1 = verschachtelt, 0 = getrennt.
+fn link_relation(a: &Lite, b: &Lite) -> u8 {
+    let (pa, pb) = (active_paths(a), active_paths(b));
+    if pa.is_empty() || pb.is_empty() {
+        return 0;
+    }
+    if pa == pb {
+        3
+    } else if pa.intersection(&pb).next().is_some() {
+        2
+    } else if pa.iter().any(|x| pb.iter().any(|y| path_related(x, y))) {
+        1
+    } else {
+        0
+    }
+}
+
+/// Vergleich der Sicherheitsfilter.
+fn filter_relation(a: &Lite, b: &Lite) -> &'static str {
+    if a.kind == "nobody" || b.kind == "nobody" {
+        return "none";
+    }
+    if a.kind != "targeted" && b.kind != "targeted" {
+        return "same";
+    }
+    if a.kind != b.kind {
+        return "broad_targeted";
+    }
+    let (sa, sb): (BTreeSet<&String>, BTreeSet<&String>) =
+        (a.apply_sids.iter().collect(), b.apply_sids.iter().collect());
+    if sa == sb {
+        "same"
+    } else if sa.intersection(&sb).next().is_some() {
+        "shared"
+    } else {
+        "different"
+    }
+}
+
+fn is_enforced(g: &Lite) -> bool {
+    g.links.iter().any(|l| l.1 && l.2)
+}
+
+/// Pfadtiefe der Verknüpfung: bei erzwungenen die höchste, sonst die tiefste.
+fn link_depth(g: &Lite, enforced: bool) -> usize {
+    let depths = g
+        .links
+        .iter()
+        .filter(|l| l.1 && (!enforced || l.2))
+        .map(|l| l.0.split('/').count());
+    if enforced {
+        depths.min().unwrap_or(0)
+    } else {
+        depths.max().unwrap_or(0)
+    }
+}
+
+/// Welche GPO setzt sich bei einem Konflikt voraussichtlich durch?
+///
+/// Erzwungene Verknüpfungen gewinnen vor nicht erzwungenen. Unter erzwungenen gewinnt die
+/// höchste, sonst die dem Ziel nächste. Bei gleicher Höhe entscheidet die Reihenfolge der
+/// Verknüpfungen, die nicht erfasst wird. Blockierte Vererbung ist ebenfalls nicht erfasst.
+fn likely_winner(gpos: &[Lite], part: &[usize]) -> (Option<usize>, String) {
+    let enforced: Vec<usize> = part
+        .iter()
+        .copied()
+        .filter(|i| is_enforced(&gpos[*i]))
+        .collect();
+    let unique = |cands: &[usize], depth: &dyn Fn(usize) -> usize, want_min: bool| {
+        let best = if want_min {
+            cands.iter().map(|i| depth(*i)).min()
+        } else {
+            cands.iter().map(|i| depth(*i)).max()
+        }?;
+        let mut top = cands.iter().copied().filter(|i| depth(*i) == best);
+        let first = top.next()?;
+        top.next().is_none().then_some(first)
+    };
+    match enforced.len() {
+        1 => (
+            Some(enforced[0]),
+            format!(
+                "{} setzt sich durch, weil nur diese GPO erzwungen ist.",
+                gpos[enforced[0]].name
+            ),
+        ),
+        0 => match unique(part, &|i| link_depth(&gpos[i], false), false) {
+            Some(w) => (
+                Some(w),
+                format!(
+                    "Keine GPO ist erzwungen. {} setzt sich durch, weil sie am nächsten am Ziel verknüpft ist.",
+                    gpos[w].name
+                ),
+            ),
+            None => (
+                None,
+                "Keine GPO ist erzwungen und alle sind gleich tief verknüpft. Die Reihenfolge der Verknüpfungen entscheidet."
+                    .to_string(),
+            ),
+        },
+        _ => match unique(&enforced, &|i| link_depth(&gpos[i], true), true) {
+            Some(w) => (
+                Some(w),
+                format!(
+                    "Mehrere GPOs sind erzwungen. {} setzt sich durch, weil sie am höchsten verknüpft ist.",
+                    gpos[w].name
+                ),
+            ),
+            None => (
+                None,
+                "Mehrere GPOs sind erzwungen und gleich hoch verknüpft. Die Reihenfolge der Verknüpfungen entscheidet."
+                    .to_string(),
+            ),
+        },
+    }
+}
+
 /// Findet Einstellungen, die in mehreren GPOs vorkommen (gleicher Bereich und Name).
 /// `kind`: `duplicate` (überall derselbe Wert) oder `conflict` (abweichende Werte).
 pub fn find_duplicates(gpos: &[Lite]) -> Vec<Value> {
@@ -438,27 +576,61 @@ pub fn find_duplicates(gpos: &[Lite]) -> Vec<Value> {
         let kind = if conflict { "conflict" } else { "duplicate" };
         // Bei einem Konflikt zählen nur GPOs mit abweichendem Wert, die zusammen wirken können
         let mut ov = 0u8;
+        let mut best = (0u8, 0u8);
+        let mut relation = (0u8, "none");
+        let mut part: BTreeSet<usize> = BTreeSet::new();
         for x in 0..idx.len() {
             for y in x + 1..idx.len() {
                 if !conflict || sigs[x] != sigs[y] {
-                    ov = ov.max(overlap(&gpos[idx[x]], &gpos[idx[y]]));
+                    let (a, b) = (&gpos[idx[x]], &gpos[idx[y]]);
+                    let pair_ov = overlap(a, b);
+                    ov = ov.max(pair_ov);
+                    if pair_ov > 0 {
+                        part.insert(idx[x]);
+                        part.insert(idx[y]);
+                    }
+                    // Angezeigt wird das Paar, das am stärksten zusammenwirkt
+                    let links = link_relation(a, b);
+                    if (pair_ov, links) >= best {
+                        best = (pair_ov, links);
+                        relation = (links, filter_relation(a, b));
+                    }
                 }
             }
         }
         let overlap_label = ["no", "maybe", "yes"][ov as usize];
+        let (winner, effect) = if conflict && ov > 0 {
+            let part: Vec<usize> = part.into_iter().collect();
+            let (w, text) = likely_winner(gpos, &part);
+            (w.map(|i| gpos[i].id.clone()), Some(text))
+        } else {
+            (None, None)
+        };
+        let enforced_count = idx.iter().filter(|i| is_enforced(&gpos[**i])).count();
+        let link_label = ["none", "nested", "partial", "same"][relation.0 as usize];
         let entries: Vec<Value> = idx
             .iter()
             .map(|i| {
                 json!({
                     "gpo_id": gpos[*i].id, "gpo_name": gpos[*i].name,
                     "detail": per[i].join(" ; "),
-                    "links": gpos[*i].links.iter().map(|l| l.0.clone()).collect::<Vec<_>>(),
+                    "enforced": is_enforced(&gpos[*i]),
+                    "links": gpos[*i].links.iter().map(|l| json!({
+                        "path": l.0, "enabled": l.1, "enforced": l.2,
+                    })).collect::<Vec<_>>(),
+                    "filter_kind": gpos[*i].kind,
+                    "filter": gpos[*i].apply_names,
                 })
             })
             .collect();
         out.push(json!({
             "scope": scope, "area": area, "name": name, "kind": kind,
             "overlap": overlap_label,
+            "link_relation": link_label,
+            "filter_relation": relation.1,
+            "enforced_count": enforced_count,
+            "winner": winner,
+            "effect": effect,
             "gpos": entries,
         }));
     }
@@ -491,6 +663,7 @@ pub async fn duplicates(c: &impl GenericClient) -> Result<Vec<Value>> {
                     (
                         l["som_path"].as_str().unwrap_or("").to_string(),
                         l["enabled"].as_bool().unwrap_or(false),
+                        l["enforced"].as_bool().unwrap_or(false),
                     )
                 })
                 .collect(),
@@ -500,6 +673,19 @@ pub async fn duplicates(c: &impl GenericClient) -> Result<Vec<Value>> {
                 .into_iter()
                 .flatten()
                 .filter_map(|p| p["sid"].as_str().map(str::to_string))
+                .collect(),
+            apply_names: data["targeting"]["apply"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|p| {
+                    p["name"]
+                        .as_str()
+                        .filter(|n| !n.is_empty())
+                        .or(p["sid"].as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect(),
             settings: settings
                 .as_array()
@@ -519,6 +705,7 @@ pub async fn duplicates(c: &impl GenericClient) -> Result<Vec<Value>> {
             (
                 x["kind"] != "conflict",
                 x["overlap"] == "no",
+                x["enforced_count"].as_u64().unwrap_or(0) == 0,
                 x["name"].as_str().unwrap_or("").to_string(),
             )
         };
@@ -577,9 +764,10 @@ mod tests {
         Lite {
             id: id.into(),
             name: id.into(),
-            links: vec![(path.into(), true)],
+            links: vec![(path.into(), true, false)],
             kind: "broad".into(),
             apply_sids: vec![],
+            apply_names: vec![],
             settings: vec![(
                 "Computer".into(),
                 "Registry".into(),
@@ -616,5 +804,71 @@ mod tests {
         ]);
         assert_eq!(d[0]["kind"], "conflict");
         assert_eq!(d[0]["overlap"], "no");
+    }
+
+    fn enforced(mut l: Lite) -> Lite {
+        l.links[0].2 = true;
+        l
+    }
+
+    #[test]
+    fn relation_of_links_and_filters() {
+        let d = find_duplicates(&[lite("a", "corp/Server", "x"), lite("b", "corp/Server", "x")]);
+        assert_eq!(d[0]["link_relation"], "same");
+        assert_eq!(d[0]["filter_relation"], "same");
+        let d = find_duplicates(&[
+            lite("a", "corp/Server", "x"),
+            lite("b", "corp/Server/SQL", "x"),
+        ]);
+        assert_eq!(d[0]["link_relation"], "nested");
+        let mut b = lite("b", "corp/Server", "x");
+        b.links.push(("corp/Clients".into(), true, false));
+        let d = find_duplicates(&[lite("a", "corp/Server", "x"), b]);
+        assert_eq!(d[0]["link_relation"], "partial");
+        let mut b = lite("b", "corp/Server", "x");
+        b.kind = "targeted".into();
+        b.apply_sids = vec!["S-1".into()];
+        let d = find_duplicates(&[lite("a", "corp/Server", "x"), b]);
+        assert_eq!(d[0]["filter_relation"], "broad_targeted");
+        let d = find_duplicates(&[lite("a", "corp/A", "x"), lite("b", "corp/B", "x")]);
+        assert_eq!(d[0]["link_relation"], "none");
+    }
+
+    #[test]
+    fn enforced_gpo_wins_conflict() {
+        // Nicht erzwungen: die dem Ziel nächste Verknüpfung gewinnt
+        let d = find_duplicates(&[
+            lite("oben", "corp/Server", "x"),
+            lite("unten", "corp/Server/SQL", "y"),
+        ]);
+        assert_eq!(d[0]["winner"], "unten");
+        assert_eq!(d[0]["enforced_count"], 0);
+        // Erzwungen schlägt die tiefere Verknüpfung
+        let d = find_duplicates(&[
+            enforced(lite("oben", "corp/Server", "x")),
+            lite("unten", "corp/Server/SQL", "y"),
+        ]);
+        assert_eq!(d[0]["winner"], "oben");
+        assert_eq!(d[0]["enforced_count"], 1);
+        assert_eq!(d[0]["gpos"][0]["enforced"], true);
+        // Beide erzwungen: die höhere gewinnt
+        let d = find_duplicates(&[
+            enforced(lite("oben", "corp/Server", "x")),
+            enforced(lite("unten", "corp/Server/SQL", "y")),
+        ]);
+        assert_eq!(d[0]["winner"], "oben");
+        // Gleiche OU: Reihenfolge ist nicht erfasst, also keine Aussage
+        let d = find_duplicates(&[lite("a", "corp/Server", "x"), lite("b", "corp/Server", "y")]);
+        assert!(d[0]["winner"].is_null());
+        assert!(d[0]["effect"].as_str().unwrap().contains("Reihenfolge"));
+        // Erzwungen an deaktivierter Verknüpfung zählt nicht
+        let mut a = enforced(lite("a", "corp/Server", "x"));
+        a.links[0].1 = false;
+        a.links.push(("corp/Server".into(), true, false));
+        let d = find_duplicates(&[a, lite("b", "corp/Server", "y")]);
+        assert_eq!(d[0]["enforced_count"], 0);
+        // Duplikat: niemand muss gewinnen
+        let d = find_duplicates(&[lite("a", "corp/S", "x"), lite("b", "corp/S", "x")]);
+        assert!(d[0]["effect"].is_null());
     }
 }

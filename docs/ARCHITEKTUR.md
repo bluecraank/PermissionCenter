@@ -71,6 +71,9 @@ Je System werden nur die Detaildaten des neuesten Scans gehalten. Das hält die 
 | `ORPHANED_OWNER` | Niedrig | Ordner mit verwaistem Besitzer |
 | `INHERITANCE_BROKEN` | Info | Unterbrochene Vererbung |
 | `SCAN_ERRORS` | Info | Nicht lesbare Ordner |
+| `AD_DCSYNC_RIGHT` | Kritisch | Konto außerhalb von Tier 0 darf das Verzeichnis replizieren |
+| `AD_ATTACK_PATH_BROAD` | Kritisch | Breite Gruppe (auch verschachtelt) hat ein AD-Recht auf einem Weg zu Tier 0 |
+| `AD_ATTACK_PATH` | Hoch | Konto oder Gruppe außerhalb von Tier 0 hat ein AD-Recht auf einem Weg zu Tier 0 |
 | `AD_EMPTY_GROUP` | Niedrig | Sicherheitsgruppe ohne Mitglieder |
 | `AD_ORPHANED_GROUP` | Niedrig | Alle (transitiven) Benutzer der Gruppe deaktiviert |
 | `AD_UNUSED_GROUP` | Info | Gruppe weder direkt noch über Verschachtelung in einer Berechtigung |
@@ -130,6 +133,8 @@ pc-server publish-client ──▶  client-releases/<ver>/              GET /api
 
 ## Grenzen / bekannte Einschränkungen
 
+- Typische Schwachstellen: Eine GPO belegt nur, was sie setzt. Fehlende Einstellungen gelten nicht als Treffer, verlässlich sind die Registry-Werte, die der Client je System meldet. Fehlt ein Wert, wird der Windows-Standardwert angenommen und im Beleg so benannt. Die Werte der Kategorie sind im Katalog `pc_common::weakness` festgelegt, neue Werte brauchen eine neue Client-Version.
+- Angriffspfade berücksichtigen keine Verweigern-Einträge, GPO-Sicherheitsfilter, SYSVOL-Rechte, Rechte über Domänengrenzen und nur den Eigenschaftssatz „Account Restrictions“. Sie zeigen mögliche Rechteketten, keine nachgewiesenen Angriffe.
 - Sehr große Gruppen (> 1500 Mitglieder) liefert LDAP ohne Range-Retrieval unvollständig; zusätzlich werden `primaryGroupID` und `memberOf` der Benutzer genutzt. Der PowerShell-Export (`Get-ADGroup -Properties Members`) hat diese Einschränkung nicht.
 - Nicht gemeldete Ordner erben in der Auswertung exakt die ACL ihres Strang-Ursprungs. Sonderfälle der Vererbung (z. B. „nur Dateien“) bilden sich bei Unterordnern deshalb nur näherungsweise ab.
 - Der Scan läuft je System sequentiell (ein Thread). Parallele Wurzel-Scans sind eine mögliche Optimierung.

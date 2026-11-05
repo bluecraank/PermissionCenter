@@ -678,5 +678,6 @@ fn run_inner(cfg: &ScanConfig, paths: &[String], max_logged_errors: u64) -> Resu
         stats,
         files: m.files,
         local_admins,
+        security_settings: Some(crate::win::secreg::read_settings()),
     })
 }

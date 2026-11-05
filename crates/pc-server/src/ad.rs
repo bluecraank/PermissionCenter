@@ -7,14 +7,16 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use futures_util::pin_mut;
 use ldap3::adapters::{Adapter, EntriesOnly, PagedResults};
+use ldap3::controls::RawControl;
 use ldap3::{LdapConn, LdapConnSettings, Scope, SearchEntry};
 use tokio_postgres::binary_copy::BinaryCopyInWriter;
-use tokio_postgres::types::Type;
+use tokio_postgres::types::{Json, Type};
 use tokio_postgres::Transaction;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::config::LdapConfig;
 use crate::db;
+use pc_common::adacl::{self, AdAclObject};
 use pc_common::sid::{domain_prefix, sid_to_string};
 use pc_common::{AdGroup, AdSnapshot, AdUser};
 
@@ -27,13 +29,15 @@ pub async fn store_snapshot(
     snap: &AdSnapshot,
     source: &str,
 ) -> Result<(usize, usize)> {
-    tx.batch_execute("DELETE FROM ad_members; DELETE FROM ad_users; DELETE FROM ad_groups;")
-        .await?;
+    tx.batch_execute(
+        "DELETE FROM ad_members; DELETE FROM ad_users; DELETE FROM ad_groups; DELETE FROM ad_acl_objects;",
+    )
+    .await?;
     let ust = tx
         .prepare(
             "INSERT INTO ad_users (sid, sam, upn, display_name, dn, enabled, last_logon, pwd_last_set, created, is_computer,
-                pwd_never_expires, spns)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) ON CONFLICT (sid) DO NOTHING",
+                pwd_never_expires, spns, uac)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) ON CONFLICT (sid) DO NOTHING",
         )
         .await?;
     let gst = tx
@@ -44,6 +48,7 @@ pub async fn store_snapshot(
         .await?;
     let mut members: HashSet<(String, String)> = HashSet::new();
     for u in &snap.users {
+        let uac = u.user_account_control.map(i64::from);
         tx.execute(
             &ust,
             &[
@@ -59,6 +64,7 @@ pub async fn store_snapshot(
                 &u.is_computer,
                 &u.password_never_expires,
                 &u.service_principal_names,
+                &uac,
             ],
         )
         .await?;
@@ -94,6 +100,7 @@ pub async fn store_snapshot(
         writer.as_mut().write(&[g, m]).await?;
     }
     writer.finish().await?;
+    store_acl_objects(tx, &snap.acl_objects).await?;
 
     let domain_sid = snap.domain_sid.clone().or_else(|| {
         snap.users
@@ -104,7 +111,24 @@ pub async fn store_snapshot(
     db::set_meta(tx, "ad_domain_sid", domain_sid.as_deref()).await?;
     db::set_meta(tx, "ad_synced_at", Some(&Utc::now().to_rfc3339())).await?;
     db::set_meta(tx, "ad_source", Some(source)).await?;
+    let quota = snap.machine_account_quota.map(|q| q.to_string());
+    db::set_meta(tx, "ad_machine_account_quota", quota.as_deref()).await?;
     Ok((snap.users.len(), snap.groups.len()))
+}
+
+/// Speichert die AD-Berechtigungen, jeweils nur mit den relevanten Einträgen.
+async fn store_acl_objects(tx: &Transaction<'_>, objects: &[AdAclObject]) -> Result<()> {
+    let st = tx
+        .prepare(
+            "INSERT INTO ad_acl_objects (dn, data) VALUES ($1, $2) ON CONFLICT (dn) DO NOTHING",
+        )
+        .await?;
+    for o in objects {
+        let mut o = o.clone();
+        o.aces.retain(adacl::is_relevant);
+        tx.execute(&st, &[&o.dn.to_lowercase(), &Json(&o)]).await?;
+    }
+    Ok(())
 }
 
 fn first<'a>(e: &'a SearchEntry, attr: &str) -> Option<&'a str> {
@@ -196,6 +220,65 @@ fn paged_search(
     Ok(out)
 }
 
+/// Liest Besitzer und Berechtigungen aller für Angriffspfade relevanten Objekte.
+fn fetch_acl_objects(ldap: &mut LdapConn, base: &str) -> Result<Vec<AdAclObject>> {
+    // LDAP_SERVER_SD_FLAGS: nur Besitzer und DACL anfordern. Die SACL dürfte ein normales
+    // Lesekonto nicht lesen, das AD ließe sonst den ganzen Descriptor weg.
+    ldap.with_controls(RawControl {
+        ctype: "1.2.840.113556.1.4.801".to_string(),
+        crit: true,
+        val: Some(vec![0x30, 0x03, 0x02, 0x01, 0x05]),
+    });
+    let entries = paged_search(
+        ldap,
+        base,
+        "(|(objectClass=user)(objectClass=group)(objectClass=domainDNS)(objectClass=organizationalUnit)(objectClass=container)(objectClass=groupPolicyContainer))",
+        &[
+            "distinguishedName",
+            "objectSid",
+            "objectClass",
+            "displayName",
+            "nTSecurityDescriptor",
+            "gPLink",
+            "gPOptions",
+        ],
+    )?;
+    let mut out = Vec::with_capacity(entries.len());
+    let mut unreadable = 0usize;
+    for e in &entries {
+        let Some(dn) = first(e, "distinguishedName") else {
+            continue;
+        };
+        let Some(sd) = e
+            .bin_attrs
+            .get("nTSecurityDescriptor")
+            .and_then(|v| v.first())
+            .and_then(|b| adacl::parse_security_descriptor(b))
+        else {
+            unreadable += 1;
+            continue;
+        };
+        let classes = e.attrs.get("objectClass").cloned().unwrap_or_default();
+        out.push(AdAclObject {
+            dn: dn.to_string(),
+            sid: entry_sid(e),
+            kind: adacl::kind_from_classes(&classes).to_string(),
+            display_name: first(e, "displayName").map(str::to_string),
+            owner: sd.owner,
+            protected: sd.protected,
+            gp_link: first(e, "gPLink").map(str::to_string),
+            gp_options: first(e, "gPOptions")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+            aces: sd.aces,
+        });
+    }
+    if unreadable > 0 {
+        warn!("LDAP: Berechtigungen von {unreadable} Objekten nicht lesbar");
+    }
+    Ok(out)
+}
+
 /// Liest Benutzer, Computer und Gruppen per LDAP (blockierend).
 pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
     let base = cfg
@@ -209,15 +292,16 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
             base,
             Scope::Base,
             "(objectClass=*)",
-            vec!["objectSid", "name"],
+            vec!["objectSid", "name", "ms-DS-MachineAccountQuota"],
         )?
         .success()?
         .0;
-    let domain_sid = root
-        .into_iter()
-        .next()
-        .map(SearchEntry::construct)
-        .and_then(|e| entry_sid(&e));
+    let root = root.into_iter().next().map(SearchEntry::construct);
+    let domain_sid = root.as_ref().and_then(entry_sid);
+    let machine_account_quota = root
+        .as_ref()
+        .and_then(|e| first(e, "ms-DS-MachineAccountQuota"))
+        .and_then(|v| v.parse().ok());
 
     let user_attrs = [
         "objectSid",
@@ -253,6 +337,14 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
             "whenCreated",
         ],
     )?;
+    // Ein Fehler hier darf den Abgleich der Konten nicht verhindern
+    let acl_objects = match fetch_acl_objects(&mut ldap, base) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!("LDAP: AD-Berechtigungen nicht gelesen, Angriffspfade bleiben leer: {e:#}");
+            Vec::new()
+        }
+    };
     let _ = ldap.unbind();
 
     // DN → SID für die Auflösung von `member`
@@ -276,6 +368,8 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
         ),
         domain_sid: domain_sid.clone(),
         collected_at: Some(Utc::now()),
+        machine_account_quota,
+        acl_objects,
         ..Default::default()
     };
     for e in &accounts {
@@ -304,6 +398,7 @@ pub fn fetch_snapshot(cfg: &LdapConfig) -> Result<AdSnapshot> {
             created: generalized_time(first(e, "whenCreated")),
             is_computer,
             password_never_expires: uac & UAC_DONT_EXPIRE_PASSWORD != 0,
+            user_account_control: Some(uac),
             service_principal_names: e
                 .attrs
                 .get("servicePrincipalName")

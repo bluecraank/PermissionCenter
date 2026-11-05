@@ -1,7 +1,7 @@
 import { Fragment, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ChevronDown, ChevronLeft, ChevronRight, Lightbulb, Wrench } from 'lucide-react'
+import { Bug, ChevronDown, ChevronLeft, ChevronRight, Lightbulb, Wrench } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -98,6 +98,17 @@ export function FindingsTable({ filter, showSystem = true }: { filter: FindingFi
                   <TableCell />
                   <TableCell colSpan={showSystem ? 4 : 3} className="space-y-3 pb-4 whitespace-normal">
                     {f.detail && <pre className="bg-muted rounded-md p-3 font-mono text-xs whitespace-pre-wrap">{f.detail}</pre>}
+                    {f.weakness && (
+                      <div className="flex gap-2 rounded-md border border-sev-medium/50 p-2 text-sm">
+                        <Bug className="text-sev-medium mt-0.5 size-4 shrink-0" />
+                        <span>
+                          <Link to="/weaknesses" className="font-medium hover:underline">
+                            Typische Schwachstelle: {f.weakness.title}
+                          </Link>
+                          <span className="text-muted-foreground block">{f.weakness.why}</span>
+                        </span>
+                      </div>
+                    )}
                     {f.recommendation && (
                       <div className="flex gap-2 text-sm">
                         <Lightbulb className="text-sev-medium mt-0.5 size-4 shrink-0" />

@@ -9,6 +9,7 @@ mod ad;
 mod analysis;
 mod api;
 mod assist;
+mod attackpath;
 mod changes;
 mod config;
 mod db;
@@ -20,6 +21,7 @@ mod insights;
 mod notify;
 mod owners;
 mod releases;
+mod weakness;
 mod web;
 
 use std::path::PathBuf;
@@ -359,6 +361,8 @@ async fn serve(state: AppState) -> Result<()> {
         .merge(insights::router(state.clone()))
         .merge(export::router(state.clone()))
         .merge(owners::router(state.clone()))
+        .merge(attackpath::router(state.clone()))
+        .merge(weakness::router(state.clone()))
         .merge(access::router(state))
         .fallback(web::static_handler)
         .layer(DefaultBodyLimit::max(cfg.max_upload_mb * 1024 * 1024))

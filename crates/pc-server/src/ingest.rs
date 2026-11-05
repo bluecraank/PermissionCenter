@@ -181,6 +181,23 @@ pub async fn ingest(tx: &Transaction<'_>, r: &ScanReport) -> Result<IngestResult
             .await?;
         }
 
+        // Auch hier: Ältere Clients melden nichts, dann bleibt der bisherige Stand
+        if let Some(settings) = &r.security_settings {
+            tx.execute(
+                "DELETE FROM system_security_settings WHERE system_id = $1",
+                &[&system_id],
+            )
+            .await?;
+            for s in settings {
+                tx.execute(
+                    "INSERT INTO system_security_settings (system_id, key, name, value)
+                     VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+                    &[&system_id, &s.key, &s.name, &s.value],
+                )
+                .await?;
+            }
+        }
+
         let root_ids: HashSet<u64> = r.roots.iter().filter_map(|x| x.folder_id).collect();
         let mut folder_rows: Vec<Vec<Box<dyn ToSql + Sync + Send>>> =
             Vec::with_capacity(r.folders.len());

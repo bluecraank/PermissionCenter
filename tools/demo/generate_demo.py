@@ -119,7 +119,55 @@ groups.append({"sid": f"{DOM}-513", "sam_account_name": "Domänen-Benutzer", "sc
 groups.append({"sid": f"{DOM}-512", "sam_account_name": "Domänen-Admins", "scope": "global", "is_security": True,
                "members": [admin["sid"], dirk["sid"]]})  # deaktiviertes Konto in Domänen-Admins
 
-ad = {"domain": "demo.local", "domain_sid": DOM, "collected_at": iso(NOW), "users": users, "groups": groups}
+g_helpdesk = group("GG_Helpdesk", "Kennwort-Rücksetzung", members=[ben])
+
+# AD-Berechtigungen mit Angriffspfaden
+FORCE_PWD = "00299570-246d-11d0-a768-00aa006e0529"
+MEMBER_ATTR = "bf9679c0-0de6-11d0-a285-00aa003049e2"
+GET_CHANGES = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"
+GET_CHANGES_ALL = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"
+DOMAIN_DN = "DC=demo,DC=local"
+GPO_DN = "cn={11111111-2222-3333-4444-555555555555},cn=policies,cn=system," + DOMAIN_DN
+
+
+def acl_ace(trustee, mask, object_type=None):
+    return {"trustee": trustee, "mask": mask, "object_type": object_type, "inherited": False}
+
+
+acl_objects = [
+    {"dn": DOMAIN_DN, "sid": DOM, "kind": "domain", "owner": f"{DOM}-512", "aces": [
+        acl_ace(svc_sql["sid"], 0x100, GET_CHANGES),  # DCSync für ein Dienstkonto
+        acl_ace(svc_sql["sid"], 0x100, GET_CHANGES_ALL),
+    ]},
+    {"dn": "CN=adm.it,OU=Admins," + DOMAIN_DN, "sid": admin["sid"], "kind": "user", "owner": f"{DOM}-512", "aces": [
+        acl_ace(g_helpdesk["sid"], 0x100, FORCE_PWD),  # Helpdesk darf Admin-Kennwort zurücksetzen
+    ]},
+    {"dn": "OU=Admins," + DOMAIN_DN, "kind": "ou", "owner": f"{DOM}-512",
+     "gp_link": f"[LDAP://{GPO_DN};0]", "aces": [
+        acl_ace(dl_fs_admin["sid"], 0x40000),  # Dateiserver-Admins dürfen die ACL der Admin-OU ändern
+    ]},
+    {"dn": dl_fs_admin["distinguished_name"], "sid": dl_fs_admin["sid"], "kind": "group", "owner": f"{DOM}-512", "aces": [
+        acl_ace(f"{DOM}-513", 0x20, MEMBER_ATTR),  # Domänen-Benutzer dürfen sich dort eintragen
+    ]},
+    {"dn": GPO_DN, "kind": "gpo", "display_name": "Admin-Arbeitsplätze", "owner": f"{DOM}-512", "aces": [
+        acl_ace(g_technik["sid"], 0xF01FF),  # Technik darf eine GPO auf der Admin-OU ändern
+    ]},
+    {"dn": olaf["distinguished_name"], "sid": olaf["sid"], "kind": "user", "owner": f"{DOM}-512", "aces": [
+        acl_ace(anna["sid"], 0xF01FF),  # führt zu nichts Privilegiertem, also kein Befund
+    ]},
+]
+
+# userAccountControl: normales Konto, dazu einzelne Risikofälle
+for u in users:
+    u["user_account_control"] = 0x1000 if u.get("is_computer") else 0x200
+eva["user_account_control"] |= 0x400000  # keine Kerberos-Vorauthentifizierung
+gina["user_account_control"] |= 0x20  # Kennwort nicht erforderlich
+krbtgt = user("krbtgt", "Schlüsselverteilung", enabled=False, pwd_days=2000)
+krbtgt["sid"] = f"{DOM}-502"
+krbtgt["user_account_control"] = 0x202
+
+ad = {"domain": "demo.local", "domain_sid": DOM, "collected_at": iso(NOW), "users": users, "groups": groups,
+      "machine_account_quota": 10, "acl_objects": acl_objects}
 (OUT / "ad-demo.json").write_text(json.dumps(ad, ensure_ascii=False, indent=1), encoding="utf-8")
 
 # --- Client-Reports ------------------------------------------------------------
