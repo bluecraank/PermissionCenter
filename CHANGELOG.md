@@ -7,6 +7,22 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-05
+
+### Hinzugefügt
+- **Angriffspfade im Active Directory** (Seite „Angriffspfade“, API `GET /api/v1/attack-paths`): zeigt Wege von Konten außerhalb der Domänen-Administration über Gruppen und AD-Rechte zur Domänenkontrolle, je Einstiegspunkt mit Schritten und betroffenen Benutzern
+- LDAP-Abgleich und `Export-ADData.ps1` erfassen Besitzer und Berechtigungen von Benutzern, Computern, Gruppen, OUs, Containern, GPOs und der Domäne; `-SkipAcl` schaltet das im Export ab
+- Prüfregeln `AD_DCSYNC_RIGHT` und `AD_ATTACK_PATH_BROAD` (Kritisch) sowie `AD_ATTACK_PATH` (Hoch) mit Audit-Assist-Anleitung und Skript mit Probelauf
+- **Typische Schwachstellen** (Seite und API `GET /api/v1/weaknesses`): Katalog mit 50 Mustern, zum Beispiel `LmCompatibilityLevel` unter 3, SMBv1, fehlende SMB- und LDAP-Signierung, LLMNR, WDigest, AS-REP-Roasting oder Kennwörter in GPP. Treffer werden zu Befunden mit Hinweis und Audit-Assist; jeder Eintrag zeigt, ob er gefunden, unauffällig oder mangels Daten nicht geprüft ist
+- Client meldet die Registry-Werte aus dem Katalog (nur HKLM, nur diese Liste, keine Geheimnisse) im Report-Feld `security_settings`
+- GPO-Client erfasst Registry-Werte aus Gruppenrichtlinien-Einstellungen und meldet gespeicherte `cpassword`-Einträge, ohne deren Inhalt zu übertragen
+- GPO-Einstellungen, die einem Muster entsprechen, zeigen in der GPO-Ansicht einen Hinweis
+- AD-Abgleich und `Export-ADData.ps1` liefern `userAccountControl` und `ms-DS-MachineAccountQuota`
+- GPO **Doppelt / Konflikte**: Vergleich der verknüpften OUs (gleich, teilweise gleich, verschachtelt, getrennt) und der Sicherheitsfilter, Kennzeichnung erzwungener GPOs und Verknüpfungen, neue Filter dafür und bei Konflikten die voraussichtlich wirksame GPO
+
+### Geändert
+- Datenbankschema Version 5 (`ad_acl_objects`, `system_security_settings`, `ad_users.uac`). Die Migration erfolgt beim Start automatisch
+
 ## [0.3.1] - 2026-11-04
 
 ### Behoben

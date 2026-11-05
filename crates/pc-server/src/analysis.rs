@@ -264,6 +264,30 @@ pub const RULES: &[Rule] = &[
         recommendation: "Mitglieder überprüfen und auf das Nötigste reduzieren; Aufgaben über delegierte Rechte statt Domänen-Admins lösen.",
     },
     Rule {
+        id: "AD_DCSYNC_RIGHT",
+        severity: Severity::Critical,
+        scope: "ad",
+        title: "Replikationsrecht außerhalb der Administratoren (DCSync)",
+        description: "Ein Konto außerhalb der Domänen-Administration darf das Verzeichnis replizieren und kann damit die Kennwort-Hashes aller Konten abrufen, auch die von krbtgt und Domänen-Admins.",
+        recommendation: "Recht entfernen. Nur Domänencontroller und ausdrücklich begründete Dienste (z. B. Entra Connect) brauchen es; solche Konten wie Domänen-Admins schützen.",
+    },
+    Rule {
+        id: "AD_ATTACK_PATH_BROAD",
+        severity: Severity::Critical,
+        scope: "ad",
+        title: "Breite Gruppe hat einen Angriffspfad zur Domänenkontrolle",
+        description: "Domänen-Benutzer, Authentifizierte Benutzer oder eine ähnlich breite Gruppe haben ein AD-Recht, das über mehrere Schritte zur Kontrolle der Domäne führt. Jedes übernommene Konto reicht als Ausgangspunkt.",
+        recommendation: "Berechtigung sofort auf die wirklich benötigte Admin-Gruppe einschränken oder entfernen.",
+    },
+    Rule {
+        id: "AD_ATTACK_PATH",
+        severity: Severity::High,
+        scope: "ad",
+        title: "Angriffspfad zur Domänenkontrolle",
+        description: "Ein Konto oder eine Gruppe außerhalb der Domänen-Administration hat ein AD-Recht, das direkt oder über weitere Schritte zur Kontrolle der Domäne führt.",
+        recommendation: "Prüfen, ob die Delegierung nötig ist; Recht entfernen oder so einschränken, dass privilegierte Konten, Gruppen und ihre OUs nicht mehr betroffen sind.",
+    },
+    Rule {
         id: "AD_PWD_NEVER_EXPIRES",
         severity: Severity::Medium,
         scope: "ad",
@@ -362,7 +386,10 @@ pub const RULES: &[Rule] = &[
 ];
 
 pub fn rule(id: &str) -> Option<&'static Rule> {
-    RULES.iter().find(|r| r.id == id)
+    RULES
+        .iter()
+        .find(|r| r.id == id)
+        .or_else(|| crate::weakness::rule(id))
 }
 
 struct Finding {
@@ -919,6 +946,46 @@ pub async fn run(tx: &Transaction<'_>, cfg: &AnalysisConfig) -> Result<AnalysisS
             });
         }
         ad_account_checks(&dir, cfg, &mut findings, &mut push_ad);
+
+        // Angriffspfade: je Einstiegspunkt (Konto + Zielobjekt) ein Befund
+        let acl_objects = crate::attackpath::load_objects(tx).await?;
+        let attack = crate::attackpath::analyze(&dir, &acl_objects);
+        for e in &attack.entries {
+            let target = attack.node(&dir, &e.target).name;
+            push_ad(
+                Finding {
+                    system_id: None,
+                    rule: e.rule(),
+                    title: format!(
+                        "{} → {target}: {}",
+                        dir.view(&e.trustee).name,
+                        e.rights_text()
+                    ),
+                    detail: format!(
+                        "Weg zur Domänenkontrolle:\n{}\nBetroffene aktive Benutzer: {}",
+                        attack.path_text(&dir, e),
+                        e.exposed_users
+                    ),
+                    path: Some(e.target_dn.clone()),
+                    sid: Some(e.trustee.clone()),
+                    affected: e.exposed_users.max(1) as i64,
+                },
+                &mut findings,
+            );
+        }
+    }
+
+    // --- Typische Schwachstellen ---
+    for h in crate::weakness::evaluate(tx, &dir).await? {
+        findings.push(Finding {
+            system_id: h.system_id,
+            rule: h.rule,
+            title: h.title,
+            detail: h.evidence.join("\n"),
+            path: None,
+            sid: None,
+            affected: h.affected,
+        });
     }
 
     // --- Gruppenrichtlinien ---
@@ -1382,7 +1449,11 @@ fn ad_account_checks(
 /// gebildet, da die Beispielpfade wechseln können.
 fn fingerprint(f: &Finding) -> String {
     let path = match f.rule {
-        "BROAD_WRITE" | "SHARE_OPEN" => f.path.as_deref().unwrap_or(""),
+        "BROAD_WRITE"
+        | "SHARE_OPEN"
+        | "AD_DCSYNC_RIGHT"
+        | "AD_ATTACK_PATH_BROAD"
+        | "AD_ATTACK_PATH" => f.path.as_deref().unwrap_or(""),
         _ => "",
     };
     let key = format!(

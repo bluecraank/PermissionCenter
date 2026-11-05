@@ -823,6 +823,10 @@ pub async fn findings(State(st): State<AppState>, Query(q): Query<FindingQuery>)
         let r = analysis::rule(v["rule"].as_str().unwrap_or(""));
         v["rule_title"] = json!(r.map(|x| x.title));
         v["recommendation"] = json!(r.map(|x| x.recommendation));
+        // Hinweis, wenn der Befund zu einem Muster aus dem Katalog gehört
+        v["weakness"] = pc_common::weakness::for_rule(v["rule"].as_str().unwrap_or(""))
+            .map(|w| json!({ "id": w.id, "title": w.title, "why": w.why }))
+            .unwrap_or(Value::Null);
         v
     })
     .collect();
@@ -830,7 +834,8 @@ pub async fn findings(State(st): State<AppState>, Query(q): Query<FindingQuery>)
 }
 
 async fn rules() -> ApiResult {
-    Ok(Json(json!(RULES)))
+    let all: Vec<&analysis::Rule> = RULES.iter().chain(crate::weakness::rules()).collect();
+    Ok(Json(json!(all)))
 }
 
 async fn recommendations(State(st): State<AppState>) -> ApiResult {

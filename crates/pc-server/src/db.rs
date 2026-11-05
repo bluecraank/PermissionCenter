@@ -13,7 +13,7 @@ use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{GenericClient, NoTls, Row};
 use tracing::{info, warn};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (
@@ -145,6 +145,11 @@ CREATE TABLE IF NOT EXISTS ad_members (
     PRIMARY KEY (group_sid, member_sid)
 );
 CREATE INDEX IF NOT EXISTS idx_ad_members_member ON ad_members(member_sid);
+ALTER TABLE ad_users ADD COLUMN IF NOT EXISTS uac BIGINT;
+CREATE TABLE IF NOT EXISTS ad_acl_objects (
+    dn   TEXT PRIMARY KEY,
+    data JSONB NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS findings (
     id         BIGSERIAL PRIMARY KEY,
@@ -252,6 +257,13 @@ CREATE TABLE IF NOT EXISTS file_aces (
 CREATE INDEX IF NOT EXISTS idx_file_aces ON file_aces(system_id, file_id);
 
 -- „Jetzt scannen“: vom Client-Dienst abgeholte Aufträge
+CREATE TABLE IF NOT EXISTS system_security_settings (
+    system_id BIGINT NOT NULL REFERENCES systems(id) ON DELETE CASCADE,
+    key       TEXT NOT NULL,
+    name      TEXT NOT NULL,
+    value     TEXT NOT NULL,
+    PRIMARY KEY (system_id, key, name)
+);
 CREATE TABLE IF NOT EXISTS scan_requests (
     system_id    BIGINT PRIMARY KEY REFERENCES systems(id) ON DELETE CASCADE,
     requested_at TIMESTAMPTZ NOT NULL,

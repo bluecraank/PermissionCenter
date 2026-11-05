@@ -14,6 +14,7 @@ use tokio_postgres::GenericClient;
 
 use crate::config::AnalysisConfig;
 use crate::directory::Directory;
+use pc_common::adacl::{rights_of, AdAce, AdRight};
 use pc_common::rights::{can_change_permissions, Rights};
 use pc_common::sid::rid;
 use pc_common::wellknown;
@@ -176,6 +177,37 @@ function Backup-AdGroup([string] $Sid) {
 }
 
 "#;
+
+/// Entfernt die erwarteten direkten Einträge aus `$acl`; vererbte werden nur gemeldet.
+const PS_AD_ACL_BODY: &str = r#"$changed = $false
+$rules = @($acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | Where-Object {
+    $rule = $_
+    $mask = [int64][int]$rule.ActiveDirectoryRights -band 4294967295
+    $type = if ($rule.ObjectType -eq [guid]::Empty) { '' } else { $rule.ObjectType.ToString() }
+    $rule.IdentityReference -eq $trustee -and "$($rule.AccessControlType)" -eq 'Allow' -and
+        @($wanted | Where-Object { $_.Mask -eq $mask -and $_.Type -eq $type }).Count -gt 0
+})
+if ($rules.Count -eq 0) { Write-Host 'Kein passender Berechtigungseintrag vorhanden.' }
+foreach ($r in $rules) {
+    $text = "$($r.ActiveDirectoryRights) $($r.ObjectType)"
+    if ($r.IsInherited) {
+        Write-Warning "Vererbt, auf dem übergeordneten Objekt entfernen: $text"
+        continue
+    }
+    if (-not $Apply) { Write-Host "[Probelauf] Eintrag entfernen: $text"; continue }
+    [void] $acl.RemoveAccessRuleSpecific($r)
+    Write-Host "-> Eintrag entfernt: $text"
+    $changed = $true
+}"#;
+
+/// Sichert die bisherige ACL und schreibt die geänderte zurück.
+const PS_AD_ACL_SAVE: &str = r#"if ($Apply -and $changed) {
+    $dir = Split-Path $backup
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
+    Add-Content -LiteralPath $backup -Value ("{0}`t{1}" -f $dn, (Get-Acl -LiteralPath $adPath).Sddl) -Encoding UTF8
+    Set-Acl -LiteralPath $adPath -AclObject $acl
+    Write-Host "ACL geschrieben. Sicherung der vorherigen ACL: $backup"
+}"#;
 
 const PS_FOOT: &str = r#"
 if (-not $Apply) { Write-Host ''; Write-Host 'Probelauf beendet - nichts geändert. Zum Anwenden mit -Apply starten.' -ForegroundColor Yellow }
@@ -1118,6 +1150,99 @@ pub async fn guide(c: &impl GenericClient, f: &FindingRef, cfg: &AnalysisConfig)
             g.script = Some(s.build());
         }
 
+        "AD_DCSYNC_RIGHT" | "AD_ATTACK_PATH_BROAD" | "AD_ATTACK_PATH" => {
+            let dn = f.path.clone().unwrap_or_default();
+            let objects = crate::attackpath::load_objects(c).await?;
+            let graph = crate::attackpath::analyze(&dir, &objects);
+            let obj = objects.iter().find(|o| o.dn.eq_ignore_ascii_case(&dn));
+            let kind = obj.map(|o| o.kind.as_str()).unwrap_or("");
+            let aces: Vec<&AdAce> = obj
+                .into_iter()
+                .flat_map(|o| o.aces.iter())
+                .filter(|a| {
+                    a.trustee == sid
+                        && rights_of(a).iter().any(|r| {
+                            crate::attackpath::applies_to(kind, *r)
+                                || (kind == "domain"
+                                    && matches!(r, AdRight::GetChanges | AdRight::GetChangesAll))
+                        })
+                })
+                .collect();
+            let is_owner = obj.is_some_and(|o| o.owner.as_deref() == Some(sid));
+
+            g.steps = steps(&[
+                "Weg unten nachvollziehen: Über welche Schritte führt dieses Recht zur Domänenkontrolle?",
+                "Klären, wofür die Berechtigung vergeben wurde. Oft ist es eine alte Delegierung oder ein Installationsprogramm.",
+                "Wird das Recht gebraucht, die Delegierung auf eine eigene Gruppe und Objekte ohne privilegierte Konten einschränken.",
+                "Skript zuerst ohne Parameter ausführen und die Ausgabe prüfen. Mit -Apply entfernt es dann die direkten Einträge und sichert vorher die ACL.",
+                "Vererbte Einträge nennt das Skript nur. Sie müssen auf dem übergeordneten Objekt entfernt werden.",
+            ]);
+            g.warning = Some(if f.rule == "AD_DCSYNC_RIGHT" {
+                "Dienste wie Entra Connect brauchen Replikationsrechte. Vorher klären, ob das Konto dazu gehört, sonst bricht die Synchronisation ab. Solche Konten als Ausnahme mit Begründung dokumentieren und wie Domänen-Admins schützen."
+                    .to_string()
+            } else if kind == "gpo" {
+                "Rechte einer GPO liegen auch auf dem SYSVOL-Ordner. Für GPOs die Berechtigungen besser in der Gruppenrichtlinienverwaltung ändern, dann bleiben AD und SYSVOL gleich."
+                    .to_string()
+            } else {
+                "Das Skript entfernt den ganzen Eintrag, auch wenn er weitere Rechte enthält. Ausgabe im Probelauf prüfen und benötigte Rechte danach gezielt neu vergeben."
+                    .to_string()
+            });
+
+            if let Some(e) = graph
+                .entries
+                .iter()
+                .find(|e| e.trustee == sid && e.target_dn.eq_ignore_ascii_case(&dn))
+            {
+                for st in graph.entry_path(&dir, e) {
+                    g.objects.push(Obj {
+                        label: format!("{} → {}", st.from.name, st.to.name),
+                        info: st.label.to_string(),
+                    });
+                }
+            }
+            g.objects_total = g.objects.len();
+
+            let mut s = ScriptBuilder::new(f, ad_target.clone());
+            s.line("Import-Module ActiveDirectory");
+            s.line(format!("$dn = {}", q(&dn)));
+            s.line(format!(
+                "$trustee = New-Object Security.Principal.SecurityIdentifier {}",
+                q(sid)
+            ));
+            s.line("$adPath = \"AD:\\$dn\"");
+            s.line("$acl = Get-Acl -LiteralPath $adPath");
+            s.line("$backup = Join-Path ([Environment]::GetFolderPath('MyDocuments')) \"PermissionCenter-Sicherung\\$stamp-AD-ACL.txt\"");
+            s.line("# Die Einträge, die der Befund nennt (Maske und Objekttyp)");
+            s.line("$wanted = @(");
+            for a in &aces {
+                s.line(format!(
+                    "    @{{ Mask = {}; Type = {} }}",
+                    a.mask,
+                    q(a.object_type.as_deref().unwrap_or(""))
+                ));
+            }
+            s.line(")");
+            s.line(PS_AD_ACL_BODY);
+            if is_owner {
+                let admins = dir
+                    .domain_sid
+                    .as_deref()
+                    .map(|d| format!("{d}-512"))
+                    .unwrap_or_default();
+                s.line(format!(
+                    "$newOwner = New-Object Security.Principal.SecurityIdentifier {}",
+                    q(&admins)
+                ));
+                s.step(
+                    &format!("{dn}: Besitzer auf Domänen-Admins setzen"),
+                    "$acl.SetOwner($newOwner)",
+                );
+                s.line("$changed = $Apply");
+            }
+            s.line(PS_AD_ACL_SAVE);
+            g.script = Some(s.build());
+        }
+
         "AD_PWD_NEVER_EXPIRES" | "AD_OLD_PASSWORD" => {
             let never = f.rule == "AD_PWD_NEVER_EXPIRES";
             g.steps = if never {
@@ -1295,6 +1420,67 @@ pub async fn guide(c: &impl GenericClient, f: &FindingRef, cfg: &AnalysisConfig)
             }
             g.objects_total = total;
             g.script = Some(s.build());
+        }
+
+        rule if pc_common::weakness::find(rule).is_some() => {
+            let w = pc_common::weakness::find(rule).expect("oben geprüft");
+            let hits = crate::weakness::evaluate(c, &dir).await?;
+            for e in hits
+                .iter()
+                .filter(|h| h.rule == rule && h.system_id == f.system_id)
+                .flat_map(|h| h.evidence.iter())
+            {
+                g.objects.push(Obj {
+                    label: e.clone(),
+                    info: String::new(),
+                });
+            }
+            g.objects_total = g.objects.len();
+            g.steps = vec![
+                w.why.to_string(),
+                w.fix.to_string(),
+                "Änderung zuerst auf einem Testsystem prüfen, dann möglichst zentral per GPO ausrollen.".to_string(),
+            ];
+            if f.system_id.is_some() {
+                let fixes: Vec<_> = w
+                    .reg
+                    .iter()
+                    .filter_map(|c| c.fix.map(|v| (c, v)))
+                    .filter(|(c, _)| g.objects.iter().any(|o| o.label.contains(c.value)))
+                    .collect();
+                g.warning = Some(
+                    "Setzt eine GPO denselben Wert, überschreibt sie diese Änderung beim nächsten Update. Dann die GPO anpassen. Manche Werte wirken erst nach einem Neustart."
+                        .to_string(),
+                );
+                if !fixes.is_empty() {
+                    let mut s = ScriptBuilder::new(f, host_target.clone());
+                    s.line("$backup = Join-Path $env:ProgramData \"PermissionCenter\\registry-backup\\$stamp-{RULE}.reg\"".replace("{RULE}", rule));
+                    for (c, v) in fixes {
+                        let path = format!(r"HKLM:\{}", c.key);
+                        let reg_path = format!(r"HKLM\{}", c.key);
+                        let (ty, val) = if c.string {
+                            ("String", q(&v.to_string()))
+                        } else {
+                            ("DWord", v.to_string())
+                        };
+                        s.step(
+                            &format!("{}: {} auf {v} setzen", c.key, c.value),
+                            &format!(
+                                "$dir = Split-Path $backup; if (-not (Test-Path $dir)) {{ New-Item -ItemType Directory -Force $dir | Out-Null }}; if (Test-Path -LiteralPath {p}) {{ reg.exe export {r} $backup /y | Out-Null }} else {{ New-Item -Path {p} -Force | Out-Null }}; Set-ItemProperty -LiteralPath {p} -Name {n} -Value {val} -Type {ty}",
+                                p = q(&path),
+                                r = q(&reg_path),
+                                n = q(c.value),
+                            ),
+                        );
+                    }
+                    g.script = Some(s.build());
+                }
+            } else {
+                g.warning = Some(
+                    "Dieser Befund stammt aus GPOs oder dem AD. Die Änderung erfolgt dort, nicht per Registry auf einem einzelnen Server."
+                        .to_string(),
+                );
+            }
         }
 
         _ => {

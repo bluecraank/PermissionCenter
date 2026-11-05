@@ -1,4 +1,5 @@
 use pc_common::gpo::*;
+use pc_common::weakness::GPP_PASSWORD_MARKER;
 use roxmltree::{Document, Node};
 use serde::Deserialize;
 use std::fs;
@@ -172,9 +173,54 @@ const NAME_KEYS: &[&str] = &[
 ];
 const SKIP_KEYS: &[&str] = &["Explain", "Supported", "Comment"];
 
+/// Einstellungen stehen bei GPP in Attributen von `Properties`. Übernommen werden nur
+/// Registry-Werte unter HKLM und die Tatsache, dass ein Kennwort gespeichert ist – der
+/// Inhalt von `cpassword` verlässt das System nie.
+fn preference_properties(n: Node, scope: &str, area: &str, out: &mut Vec<GpoSetting>) {
+    if let Some(user) = n.attribute("cpassword").filter(|c| !c.is_empty()).map(|_| {
+        n.attribute("userName")
+            .or(n.attribute("newName"))
+            .or(n.attribute("accountName"))
+            .unwrap_or("unbekanntes Konto")
+    }) {
+        out.push(GpoSetting {
+            scope: scope.to_string(),
+            area: area.to_string(),
+            name: format!("{GPP_PASSWORD_MARKER}: {user}"),
+            detail: "Marker: cpassword gesetzt".to_string(),
+        });
+    }
+    let hive = n.attribute("hive").unwrap_or("HKEY_LOCAL_MACHINE");
+    if let (Some(key), Some(name), true, false) = (
+        n.attribute("key"),
+        n.attribute("name"),
+        hive.eq_ignore_ascii_case("HKEY_LOCAL_MACHINE"),
+        n.attribute("action") == Some("D"),
+    ) {
+        let raw = n.attribute("value").unwrap_or("");
+        // REG_DWORD steht hexadezimal im Bericht
+        let (field, value) = if n.attribute("type") == Some("REG_DWORD") {
+            let v = u32::from_str_radix(raw, 16).map(|v| v.to_string());
+            ("SettingNumber", v.unwrap_or_else(|_| raw.to_string()))
+        } else {
+            ("SettingString", raw.to_string())
+        };
+        let full = format!("{key}\\{name}");
+        out.push(GpoSetting {
+            scope: scope.to_string(),
+            area: area.to_string(),
+            name: truncate(&full, 400),
+            detail: format!("KeyName: {full} | {field}: {}", truncate(&value, 300)),
+        });
+    }
+}
+
 fn walk(n: Node, ctx: &mut Vec<String>, scope: &str, area: &str, out: &mut Vec<GpoSetting>) {
     let mut leaves: Vec<(String, String)> = Vec::new();
     for c in n.children().filter(|c| c.is_element()) {
+        if c.tag_name().name() == "Properties" {
+            preference_properties(c, scope, area, out);
+        }
         if !has_elem_children(c) {
             let t = c.text().unwrap_or("").trim();
             let key = c.tag_name().name();
@@ -332,4 +378,54 @@ pub fn load(dir: &Path) -> Result<GpoSnapshot, String> {
     ds.gpos
         .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     Ok(ds)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings(xml: &str) -> Vec<GpoSetting> {
+        let doc = Document::parse(xml).unwrap();
+        let mut out = Vec::new();
+        walk(
+            doc.root_element(),
+            &mut Vec::new(),
+            "Computer",
+            "Prefs",
+            &mut out,
+        );
+        out
+    }
+
+    #[test]
+    fn stored_password_is_flagged_without_its_value() {
+        let s = settings(
+            r#"<Groups><User><Properties userName="Administrator" cpassword="GEHEIMERWERT" /></User></Groups>"#,
+        );
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].name, format!("{GPP_PASSWORD_MARKER}: Administrator"));
+        assert!(!format!("{s:?}").contains("GEHEIMERWERT"));
+    }
+
+    #[test]
+    fn registry_preference_becomes_key_and_value() {
+        let s = settings(
+            r#"<RegistrySettings><Registry><Properties hive="HKEY_LOCAL_MACHINE" key="SYSTEM\CurrentControlSet\Control\Lsa" name="LmCompatibilityLevel" type="REG_DWORD" value="0000000A" action="U" /></Registry></RegistrySettings>"#,
+        );
+        assert_eq!(
+            s[0].detail,
+            r"KeyName: SYSTEM\CurrentControlSet\Control\Lsa\LmCompatibilityLevel | SettingNumber: 10"
+        );
+    }
+
+    #[test]
+    fn other_hives_and_deletions_are_ignored() {
+        for attrs in [
+            r#"hive="HKEY_CURRENT_USER" key="A" name="B" value="1""#,
+            r#"hive="HKEY_LOCAL_MACHINE" key="A" name="B" value="1" action="D""#,
+        ] {
+            let xml = format!("<R><Registry><Properties {attrs} /></Registry></R>");
+            assert!(settings(&xml).is_empty(), "{attrs}");
+        }
+    }
 }

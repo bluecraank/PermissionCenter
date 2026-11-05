@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Exportiert Benutzer, Computer und Gruppen des Active Directory für den PermissionCenter-Server.
+    Exportiert Benutzer, Computer, Gruppen und AD-Berechtigungen für den PermissionCenter-Server.
 
 .DESCRIPTION
     Erzeugt eine JSON-Datei im Format, das der Server unter /api/v1/ad/import bzw. mit
@@ -19,7 +19,9 @@ param(
     # Basis-URL des PermissionCenter-Servers; wenn gesetzt, wird direkt hochgeladen.
     [string] $Server,
     # Domänencontroller (optional)
-    [string] $DomainController
+    [string] $DomainController,
+    # Keine AD-Berechtigungen auslesen (dann bleiben die Angriffspfade leer)
+    [switch] $SkipAcl
 )
 
 $ErrorActionPreference = 'Stop'
@@ -38,10 +40,10 @@ Write-Host "Domäne: $($domain.DNSRoot) ($($domain.DomainSID))"
 
 Write-Host "Lese Benutzer…"
 $users = Get-ADUser -Filter * @common -Properties SamAccountName, UserPrincipalName, DisplayName, Enabled,
-    LastLogonDate, PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID, PasswordNeverExpires, ServicePrincipalNames
+    LastLogonDate, PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID, PasswordNeverExpires, ServicePrincipalNames, userAccountControl
 Write-Host "Lese Computer…"
 $computers = Get-ADComputer -Filter * @common -Properties SamAccountName, Enabled, LastLogonDate,
-    PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID
+    PasswordLastSet, whenCreated, MemberOf, PrimaryGroupID, userAccountControl
 Write-Host "Lese Gruppen…"
 $groups = Get-ADGroup -Filter * @common -Properties Members, Description, GroupScope, GroupCategory, whenCreated
 
@@ -74,8 +76,61 @@ function Convert-Account($a, [bool] $isComputer) {
         is_computer         = $isComputer
         password_never_expires  = [bool]$a.PasswordNeverExpires
         service_principal_names = @(if ($isComputer) { } else { $a.ServicePrincipalNames })
+        user_account_control = [uint32]$a.userAccountControl
         member_of           = @($memberOf | Select-Object -Unique)
     }
+}
+
+# AD-Berechtigungen für die Angriffspfade. Die Bewertung macht der Server; hier fallen nur
+# Einträge weg, die nie relevant sind. Das hält den Export auch in großen Domänen klein.
+function Get-AclObjects {
+    # SYSTEM, SELF, CREATOR OWNER, Enterprise-DCs, Administratoren, Domänen- und Organisations-Admins
+    $skip = @{}
+    foreach ($s in 'S-1-5-18', 'S-1-5-10', 'S-1-3-0', 'S-1-5-9', 'S-1-5-32-544',
+        "$($domain.DomainSID.Value)-512", "$($domain.DomainSID.Value)-519") { $skip[$s] = $true }
+    # GENERIC_ALL, GENERIC_WRITE, WRITE_OWNER, WRITE_DAC, CONTROL_ACCESS, WRITE_PROP, SELF
+    $relevant = 0x10000000L -bor 0x40000000L -bor 0x80000L -bor 0x40000L -bor 0x100L -bor 0x20L -bor 0x8L
+    $kinds = @{ user = 'user'; computer = 'computer'; group = 'group'; domainDNS = 'domain'
+        organizationalUnit = 'ou'; container = 'container'; groupPolicyContainer = 'gpo' }
+    $filter = '(|(objectClass=user)(objectClass=group)(objectClass=domainDNS)(objectClass=organizationalUnit)(objectClass=container)(objectClass=groupPolicyContainer))'
+    $sidType = [Security.Principal.SecurityIdentifier]
+    Get-ADObject -LDAPFilter $filter @common -Properties nTSecurityDescriptor, objectSid, displayName, gPLink, gPOptions | ForEach-Object {
+        $sd = $_.nTSecurityDescriptor
+        if ($null -eq $sd) { return }
+        $aces = foreach ($r in $sd.GetAccessRules($true, $true, $sidType)) {
+            if ("$($r.AccessControlType)" -ne 'Allow') { continue }
+            if ($r.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) { continue }
+            $trustee = $r.IdentityReference.Value
+            if ($skip.ContainsKey($trustee)) { continue }
+            $mask = [int64][int]$r.ActiveDirectoryRights -band 4294967295L
+            if (-not ($mask -band $relevant)) { continue }
+            [ordered]@{
+                trustee     = $trustee
+                mask        = $mask
+                object_type = if ($r.ObjectType -eq [guid]::Empty) { $null } else { $r.ObjectType.ToString() }
+                inherited   = [bool]$r.IsInherited
+            }
+        }
+        $kind = $kinds["$($_.ObjectClass)"]
+        if (-not $kind) { $kind = 'container' }
+        [ordered]@{
+            dn         = $_.DistinguishedName
+            sid        = if ($_.objectSid) { $_.objectSid.Value } else { $null }
+            kind       = $kind
+            display_name = $_.displayName
+            owner      = $sd.GetOwner($sidType).Value
+            protected  = [bool]$sd.AreAccessRulesProtected
+            gp_link    = $_.gPLink
+            gp_options = if ($_.gPOptions) { [int]$_.gPOptions } else { 0 }
+            aces       = @($aces)
+        }
+    }
+}
+
+$aclObjects = @()
+if (-not $SkipAcl) {
+    Write-Host "Lese AD-Berechtigungen…"
+    $aclObjects = @(Get-AclObjects)
 }
 
 $scopeMap = @{ Global = 'global'; DomainLocal = 'domain_local'; Universal = 'universal' }
@@ -84,6 +139,7 @@ $snapshot = [ordered]@{
     domain       = $domain.DNSRoot
     domain_sid   = $domain.DomainSID.Value
     collected_at = ConvertTo-Iso (Get-Date)
+    machine_account_quota = (Get-ADObject -Identity $domain.DistinguishedName @common -Properties 'ms-DS-MachineAccountQuota').'ms-DS-MachineAccountQuota'
     users        = @(
         @($users | ForEach-Object { Convert-Account $_ $false }) +
         @($computers | ForEach-Object { Convert-Account $_ $true })
@@ -101,11 +157,12 @@ $snapshot = [ordered]@{
             created            = ConvertTo-Iso $_.whenCreated
         }
     })
+    acl_objects  = $aclObjects
 }
 
 $json = $snapshot | ConvertTo-Json -Depth 6 -Compress
 [System.IO.File]::WriteAllText($OutFile, $json, (New-Object System.Text.UTF8Encoding $false))
-Write-Host ("Exportiert: {0} Konten, {1} Gruppen -> {2}" -f $snapshot.users.Count, $snapshot.groups.Count, $OutFile)
+Write-Host ("Exportiert: {0} Konten, {1} Gruppen, {2} Objekte mit Berechtigungen -> {3}" -f $snapshot.users.Count, $snapshot.groups.Count, $aclObjects.Count, $OutFile)
 
 if ($Server) {
     $uri = $Server.TrimEnd('/') + '/api/v1/ad/import'

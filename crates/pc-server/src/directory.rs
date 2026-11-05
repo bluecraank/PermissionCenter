@@ -24,6 +24,7 @@ pub struct AdUserRow {
     pub pwd_last_set: Option<DateTime<Utc>>,
     pub pwd_never_expires: bool,
     pub spns: Vec<String>,
+    pub uac: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -78,7 +79,7 @@ impl Directory {
         for r in c
             .query(
                 "SELECT sid, sam, upn, display_name, enabled, last_logon, created, is_computer,
-                        pwd_last_set, pwd_never_expires, COALESCE(spns, '{}') FROM ad_users",
+                        pwd_last_set, pwd_never_expires, COALESCE(spns, '{}'), uac FROM ad_users",
                 &[],
             )
             .await?
@@ -96,6 +97,7 @@ impl Directory {
                     pwd_last_set: r.get(8),
                     pwd_never_expires: r.get(9),
                     spns: r.get(10),
+                    uac: r.get(11),
                 },
             );
         }
@@ -142,6 +144,22 @@ impl Directory {
             ad_loaded,
             inactive_before: Utc::now() - Duration::days(inactive_days),
         })
+    }
+
+    /// Leeres Verzeichnis für Unit-Tests.
+    #[cfg(test)]
+    pub fn empty_for_tests(inactive_before: DateTime<Utc>) -> Self {
+        Self {
+            client: HashMap::new(),
+            users: HashMap::new(),
+            groups: HashMap::new(),
+            member_of: HashMap::new(),
+            members: HashMap::new(),
+            domain: None,
+            domain_sid: None,
+            ad_loaded: false,
+            inactive_before,
+        }
     }
 
     pub fn is_user(&self, sid: &str) -> bool {

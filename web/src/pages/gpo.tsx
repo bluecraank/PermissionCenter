@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { FileSearch, FolderTree, Layers, ShieldAlert, Target, Unlink } from 'lucide-react'
+import { Bug, FileSearch, FolderTree, Layers, Lock, ShieldAlert, Target, Unlink } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,6 +37,7 @@ interface GpoSetting {
   area: string
   name: string
   detail: string
+  weakness?: { id: string; title: string; why: string; fix: string; evidence: string } | null
 }
 interface GpoFinding {
   severity: 'warn' | 'info'
@@ -80,7 +81,7 @@ interface SearchResult {
   total: number
   gpos: number
   areas: string[]
-  rows: { gpo_id: string; gpo_name: string; scope: string; area: string; name: string; detail: string }[]
+  rows: { gpo_id: string; gpo_name: string; scope: string; area: string; name: string; detail: string; weakness?: GpoSetting['weakness'] }[]
 }
 
 interface DuplicateItem {
@@ -89,8 +90,22 @@ interface DuplicateItem {
   name: string
   kind: 'duplicate' | 'conflict'
   overlap: 'no' | 'maybe' | 'yes'
-  gpos: { gpo_id: string; gpo_name: string; detail: string; links: string[] }[]
+  link_relation: LinkRelation
+  filter_relation: keyof typeof FILTER_RELATION
+  enforced_count: number
+  winner: string | null
+  effect: string | null
+  gpos: {
+    gpo_id: string
+    gpo_name: string
+    detail: string
+    enforced: boolean
+    links: { path: string; enabled: boolean; enforced: boolean }[]
+    filter_kind: string
+    filter: string[]
+  }[]
 }
+type LinkRelation = 'same' | 'partial' | 'nested' | 'none'
 interface DuplicatesResult {
   total: number
   conflicts: number
@@ -101,6 +116,21 @@ const OVERLAP = {
   yes: { label: 'Überlappung: ja', cls: 'text-sev-high border-sev-high/50' },
   maybe: { label: 'Überlappung: möglich', cls: 'text-sev-medium border-sev-medium/50' },
   no: { label: 'Überlappung: nein', cls: 'text-muted-foreground' },
+} as const
+
+const LINK_RELATION: Record<LinkRelation, { label: string; cls: string }> = {
+  same: { label: 'Gleiche OUs', cls: 'text-sev-high border-sev-high/50' },
+  partial: { label: 'Teilweise gleiche OUs', cls: 'text-sev-high border-sev-high/50' },
+  nested: { label: 'Verschachtelte OUs', cls: 'text-sev-medium border-sev-medium/50' },
+  none: { label: 'Getrennte OUs', cls: 'text-muted-foreground' },
+}
+
+const FILTER_RELATION = {
+  same: { label: 'Gleicher Filter', cls: 'text-sev-high border-sev-high/50' },
+  shared: { label: 'Filter teilweise gleich', cls: 'text-sev-medium border-sev-medium/50' },
+  broad_targeted: { label: 'Breit und gezielt', cls: 'text-sev-medium border-sev-medium/50' },
+  different: { label: 'Anderer Filter', cls: 'text-muted-foreground' },
+  none: { label: 'Filter: niemand', cls: 'text-muted-foreground' },
 } as const
 
 const KIND = {
@@ -441,6 +471,11 @@ function SettingsTab({ open }: { open: (id: string) => void }) {
                   </TableCell>
                   <TableCell className="whitespace-normal">
                     <Hl text={r.name} terms={inc} />
+                    {r.weakness && (
+                      <div className="text-sev-medium mt-1 flex items-center gap-1 text-xs font-medium" title={r.weakness.why}>
+                        <Bug className="size-3.5 shrink-0" /> Typische Schwachstelle: {r.weakness.title}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground font-mono text-xs break-words whitespace-normal">
                     <Hl text={r.detail} terms={inc} />
@@ -461,13 +496,21 @@ function SettingsTab({ open }: { open: (id: string) => void }) {
 function DuplicatesTab({ open }: { open: (id: string) => void }) {
   const [kind, setKind] = useState('all')
   const [onlyOverlap, setOnlyOverlap] = useState(true)
+  const [relation, setRelation] = useState('all')
+  const [onlyEnforced, setOnlyEnforced] = useState(false)
   const { data, error, isLoading } = useQuery({
     queryKey: ['gpo-duplicates'],
     queryFn: () => api.get<DuplicatesResult>('/gpo/duplicates'),
   })
   if (error) return <ErrorState error={error} />
   if (isLoading || !data) return <Loading rows={4} />
-  const items = data.items.filter((d) => (kind === 'all' || d.kind === kind) && (!onlyOverlap || d.overlap !== 'no'))
+  const items = data.items.filter(
+    (d) =>
+      (kind === 'all' || d.kind === kind) &&
+      (!onlyOverlap || d.overlap !== 'no') &&
+      (relation === 'all' || d.link_relation === relation) &&
+      (!onlyEnforced || d.enforced_count > 0),
+  )
   return (
     <div className="mt-3 space-y-3">
       <div className="flex flex-wrap items-center gap-3">
@@ -484,6 +527,22 @@ function DuplicatesTab({ open }: { open: (id: string) => void }) {
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={onlyOverlap} onChange={(e) => setOnlyOverlap(e.target.checked)} />
           nur überlappende
+        </label>
+        <Select value={relation} onValueChange={setRelation}>
+          <SelectTrigger className="w-52">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Alle Verknüpfungen</SelectItem>
+            <SelectItem value="same">{LINK_RELATION.same.label}</SelectItem>
+            <SelectItem value="partial">{LINK_RELATION.partial.label}</SelectItem>
+            <SelectItem value="nested">{LINK_RELATION.nested.label}</SelectItem>
+            <SelectItem value="none">{LINK_RELATION.none.label}</SelectItem>
+          </SelectContent>
+        </Select>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={onlyEnforced} onChange={(e) => setOnlyEnforced(e.target.checked)} />
+          nur mit erzwungener GPO
         </label>
         <span className="text-muted-foreground text-sm">
           {num(items.length)} von {num(data.total)} Einstellungen ({num(data.conflicts)} Konflikte gesamt)
@@ -503,20 +562,72 @@ function DuplicatesTab({ open }: { open: (id: string) => void }) {
                 <Badge variant="outline" className={OVERLAP[d.overlap].cls}>
                   {OVERLAP[d.overlap].label}
                 </Badge>
+                <Badge variant="outline" className={LINK_RELATION[d.link_relation].cls}>
+                  {LINK_RELATION[d.link_relation].label}
+                </Badge>
+                <Badge variant="outline" className={FILTER_RELATION[d.filter_relation].cls}>
+                  {FILTER_RELATION[d.filter_relation].label}
+                </Badge>
+                {d.enforced_count > 0 ? (
+                  <Badge className="bg-sev-medium text-white">
+                    <Lock className="size-3" /> {d.enforced_count} von {d.gpos.length} erzwungen
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-muted-foreground">
+                    Nicht erzwungen
+                  </Badge>
+                )}
               </div>
               <div className="text-muted-foreground text-xs">
                 {d.scope} / {d.area}
               </div>
+              {d.effect && (
+                <p className="mt-1 text-sm">
+                  <span className="font-medium">Voraussichtlich wirksam: </span>
+                  {d.effect}
+                </p>
+              )}
             </CardHeader>
             <CardContent className="space-y-1 px-2">
               {d.gpos.map((g) => (
                 <button
                   key={g.gpo_id}
                   onClick={() => open(g.gpo_id)}
-                  className="hover:bg-accent/50 flex w-full flex-col gap-0.5 rounded px-2 py-1 text-left text-sm sm:flex-row sm:gap-3"
+                  className="hover:bg-accent/50 grid w-full gap-x-3 gap-y-1 rounded px-2 py-1.5 text-left text-sm md:grid-cols-[14rem_1fr_1fr]"
                 >
-                  <span className="shrink-0 font-medium sm:w-64 sm:truncate">{g.gpo_name}</span>
+                  <span className="min-w-0">
+                    <span className="block font-medium break-words">{g.gpo_name}</span>
+                    {d.winner === g.gpo_id && (
+                      <Badge variant="outline" className="text-ok border-ok/40 mt-0.5">
+                        Setzt sich durch
+                      </Badge>
+                    )}
+                  </span>
                   <span className="text-muted-foreground min-w-0 font-mono text-xs break-words">{g.detail}</span>
+                  <span className="min-w-0 space-y-1 text-xs">
+                    {g.links.length === 0 && <span className="text-muted-foreground block">Nicht verknüpft</span>}
+                    {g.links.map((l) => (
+                      <span
+                        key={l.path}
+                        className={cn('flex flex-wrap items-center gap-1.5 break-all', !l.enabled && 'text-muted-foreground line-through')}
+                      >
+                        {l.path}
+                        {l.enforced && l.enabled && (
+                          <Badge className="bg-sev-medium px-1.5 py-0 text-white">
+                            <Lock className="size-3" /> Erzwungen
+                          </Badge>
+                        )}
+                      </span>
+                    ))}
+                    <span className="text-muted-foreground block">
+                      Filter:{' '}
+                      {g.filter_kind === 'targeted'
+                        ? g.filter.join(', ')
+                        : g.filter_kind === 'nobody'
+                          ? 'niemand'
+                          : 'alle / breit'}
+                    </span>
+                  </span>
                 </button>
               ))}
             </CardContent>
@@ -843,12 +954,12 @@ function GpoSheet({ id, onClose }: { id: string | null; onClose: () => void }) {
               </TabsContent>
               <TabsContent value="set" className="space-y-3">
                 <Input placeholder="In dieser GPO suchen" value={sq} onChange={(e) => setSq(e.target.value)} />
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Bereich</TableHead>
+                      <TableHead className="w-24">Bereich</TableHead>
                       <TableHead>Einstellung</TableHead>
-                      <TableHead>Details</TableHead>
+                      <TableHead className="w-1/3">Details</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -857,10 +968,19 @@ function GpoSheet({ id, onClose }: { id: string | null; onClose: () => void }) {
                         <TableCell className="text-muted-foreground whitespace-normal">
                           {s.scope} / {s.area}
                         </TableCell>
-                        <TableCell className="whitespace-normal">
+                        <TableCell className="whitespace-normal [overflow-wrap:anywhere]">
                           <Hl text={s.name} terms={terms} />
+                          {s.weakness && (
+                            <div className="border-sev-medium/50 mt-1 rounded-md border p-2 text-xs">
+                              <div className="text-sev-medium flex items-center gap-1 font-medium">
+                                <Bug className="size-3.5 shrink-0" /> Typische Schwachstelle: {s.weakness.title}
+                              </div>
+                              <p className="text-muted-foreground mt-0.5">{s.weakness.why}</p>
+                              <p className="mt-0.5">{s.weakness.fix}</p>
+                            </div>
+                          )}
                         </TableCell>
-                        <TableCell className="text-muted-foreground font-mono text-xs break-words whitespace-normal">
+                        <TableCell className="text-muted-foreground font-mono text-xs whitespace-normal [overflow-wrap:anywhere]">
                           <Hl text={s.detail} terms={terms} />
                         </TableCell>
                       </TableRow>

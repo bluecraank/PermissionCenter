@@ -29,8 +29,10 @@ Eine einfache Schritt-für-Schritt-Anleitung steht in [INSTALL.md](INSTALL.md).
 | Ausschlüsse | Systemordner (`C:\Windows`, `Program Files`, `ProgramData`, `$Recycle.Bin`, `System Volume Information`, `AppData` …), Platzhalter, `%VAR%`, Ordner mit Attribut System+Versteckt |
 | Verzeichnisstränge | Jeder Ordner kennt seinen `acl_source` (nächster Vorfahr mit eigenen Rechten). Übertragen werden nur Ordner mit abweichenden Rechten, ihre Vorfahren und die obersten Ebenen; alle anderen erben exakt |
 | Verwaiste Einträge | Nicht auflösbare SIDs (Client) und Domänen-SIDs, die im AD nicht mehr existieren (Server); auch verwaiste Besitzer |
-| Active Directory | LDAP-Synchronisation (auch periodisch) oder JSON-Import (`tools/Export-ADData.ps1`): Benutzer, Computer, Gruppen, verschachtelte Mitgliedschaften |
-| Analyse | 28 Prüfregeln, z. B. verwaiste SIDs, Schreibrechte für „Jeder“, offene Freigaben, deaktivierte/inaktive Benutzer mit Rechten, Direktberechtigungen statt AGDLP, leere/verwaiste/ungenutzte Gruppen, lokale Administratoren, Dateien mit eigenen Rechten. Im AD außerdem: inaktive Konten in privilegierten Gruppen, zu viele Domänen-Admins, Kerberoasting (SPN an Benutzerkonten), „Kennwort läuft nie ab“, sehr alte Kennwörter, verwaiste Computerkonten |
+| Active Directory | LDAP-Synchronisation (auch periodisch) oder JSON-Import (`tools/Export-ADData.ps1`): Benutzer, Computer, Gruppen, verschachtelte Mitgliedschaften, Berechtigungen an AD-Objekten |
+| Typische Schwachstellen | Katalog mit 50 häufigen Mustern (z. B. `LmCompatibilityLevel`, SMBv1, LLMNR, fehlende Signierung, AS-REP-Roasting, GPP-Kennwörter), abgeglichen mit Registry-Werten vom Client, GPOs und dem AD; Treffer erscheinen als Befund mit Hinweis |
+| Angriffspfade | Wege von Konten außerhalb der Domänen-Administration über Gruppen und AD-Rechte (z. B. DCSync, Vollzugriff, Kennwort zurücksetzen, GPO ändern) zur Domänenkontrolle, mit betroffenen Benutzern und Skript zum Beheben |
+| Analyse | 31 Prüfregeln, z. B. verwaiste SIDs, Schreibrechte für „Jeder“, offene Freigaben, deaktivierte/inaktive Benutzer mit Rechten, Direktberechtigungen statt AGDLP, leere/verwaiste/ungenutzte Gruppen, lokale Administratoren, Dateien mit eigenen Rechten. Im AD außerdem: inaktive Konten in privilegierten Gruppen, zu viele Domänen-Admins, Kerberoasting (SPN an Benutzerkonten), „Kennwort läuft nie ab“, sehr alte Kennwörter, verwaiste Computerkonten |
 | Audit | Punktwert 0–100 und Note A–F je System, für das AD und gesamt; Checkliste bestanden/nicht bestanden |
 | Empfehlungen | Priorisierte Maßnahmen je Regel mit Aufwandsschätzung und betroffenen Systemen |
 | Audit-Assist | Führt Schritt für Schritt durch alle offenen Befunde (wichtigste zuerst): Anleitung, betroffene Objekte und ein fertiges PowerShell-Skript je Befund. Erledigte Befunde werden beim nächsten Scan bzw. AD-Abgleich automatisch bestätigt, Ausnahmen mit Begründung zählen nicht in die Bewertung |
@@ -39,7 +41,7 @@ Eine einfache Schritt-für-Schritt-Anleitung steht in [INSTALL.md](INSTALL.md).
 | Zugriffsprüfung | „Wer hat Zugriff auf `\\FS01\Daten\Vertrieb`?“ – Gruppen werden bis zum einzelnen Benutzer aufgelöst, inkl. Freigabeberechtigungen und Dateneigentümer |
 | Dateneigentümer | Fachlich verantwortliche Person je Ordner (gilt für Unterordner), sichtbar in Zugriffsprüfung und Exporten |
 | Berichte und Exporte | Audit-Bericht und Zugriffsbericht je Person zum Drucken bzw. als PDF; CSV (Excel) für Befunde, Audit, Berechtigungen, Änderungen, Zugriffe |
-| Gruppenrichtlinien | Eigener Client `gpo-client` (auf einem DC) liest alle GPOs: Einstellungen, Verknüpfungen, Berechtigungen. Die Weboberfläche zeigt sie unter *Gruppenrichtlinien*: durchsuchbare Einstellungen, doppelte und widersprüchliche Einstellungen über mehrere GPOs, gezielt zugewiesene GPOs (Sicherheitsfilterung, inkl. Gruppenmitglieder), Berechtigungsmatrix, Verknüpfungsbaum. 8 Prüfregeln (`GPO_*`: nicht verknüpft, leer, wirkungslos, verwaiste Berechtigungen, MS16-072, AD/SYSVOL-Version, doppelte Einstellungen, widersprüchliche Einstellungen) fließen in Befunde und Audit ein |
+| Gruppenrichtlinien | Eigener Client `gpo-client` (auf einem DC) liest alle GPOs: Einstellungen, Verknüpfungen, Berechtigungen. Die Weboberfläche zeigt sie unter *Gruppenrichtlinien*: durchsuchbare Einstellungen, doppelte und widersprüchliche Einstellungen über mehrere GPOs mit Vergleich von OUs, Filtern und Erzwingung, gezielt zugewiesene GPOs (Sicherheitsfilterung, inkl. Gruppenmitglieder), Berechtigungsmatrix, Verknüpfungsbaum. 8 Prüfregeln (`GPO_*`: nicht verknüpft, leer, wirkungslos, verwaiste Berechtigungen, MS16-072, AD/SYSVOL-Version, doppelte Einstellungen, widersprüchliche Einstellungen) fließen in Befunde und Audit ein |
 | Zusammenhänge | Für jeden Benutzer und jede Gruppe: direkte Zugriffe, Zugriffe über (verschachtelte) Gruppen, Mitglieder, Befunde |
 | Visualisierung | Interaktive Graphen: IT-Landschaft (Domäne → Systeme → Freigaben ↔ Gruppen), Berechtigungsstränge je System, Beziehungen je Prinzipal |
 | Betrieb | Docker Compose mit PostgreSQL, Client als Windows-Dienst oder geplante Aufgabe, „Jetzt scannen“ aus der Weboberfläche, signierte OTA-Updates, rotierende Logdateien, CI/Release über GitHub Actions |
@@ -155,13 +157,13 @@ Beide Programme nutzen TOML-Dateien: `schlüssel = wert`, Abschnitte und Komment
    # Version in Cargo.toml ([workspace.package] version) erhöhen, CHANGELOG pflegen
    cargo build --release -p pc-client -p pc-server
    .\target\release\pc-server.exe publish-client `
-       --file .\target\release\pc-client.exe --version 0.3.1 `
+       --file .\target\release\pc-client.exe --version 0.4.0 `
        --signing-key C:\Sicher\permcenter-signing.key `
        --server http://permcenter:8080 --token <ein Wert aus PC_API_TOKENS> --notes "…"
    ```
    Ohne `--server` legt `publish-client` das Release im lokalen `client_releases_dir` ab (z. B. direkt auf dem Server).
    Liegt die Signatur schon vor (z. B. aus der `release.json` eines GitHub-Releases), genügt `--signature <Base64>` statt `--signing-key`.
-   Rohe API: `POST /api/v1/client/releases?version=0.3.1&signature=…` mit `X-Api-Key` und der EXE als Body.
+   Rohe API: `POST /api/v1/client/releases?version=0.4.0&signature=…` mit `X-Api-Key` und der EXE als Body.
 
 Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ein Update installiert wird, müssen **Größe, SHA-256 und Ed25519-Signatur** stimmen; die Signatur deckt Version und Inhalt gemeinsam ab, ein Downgrade mit einer alten Signatur ist also nicht möglich. Danach tauscht der Client seine EXE aus und startet neu. Der Dienst beendet sich dazu mit Code 10, die Dienst-Wiederherstellung startet ihn wieder. Ohne `public_key` verweigert der Client Updates, solange `require_signature = true` gilt (Standard).
 
@@ -174,7 +176,7 @@ Die Clients prüfen vor jedem Scan bzw. im Dienst in festen Abständen. Bevor ei
   - Es schiebt das Server-Image nach `ghcr.io/<owner>/permissioncenter-server:<version>`.
 - Danach den Client auf dem eigenen Server bereitstellen:
   ```powershell
-  .\pc-server.exe publish-client --file .\pc-client.exe --version 0.3.1 `
+  .\pc-server.exe publish-client --file .\pc-client.exe --version 0.4.0 `
       --signature <signature aus release.json> --server http://permcenter:8080 --token <API-Token>
   ```
 
